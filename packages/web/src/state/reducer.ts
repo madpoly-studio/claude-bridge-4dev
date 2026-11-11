@@ -84,9 +84,13 @@ export function mergeRecords(stream: StreamState, incoming: SessionEventRecord[]
     for (const r of sortedIncoming) if (!map.has(r.id)) map.set(r.id, r);
     records = [...map.values()].sort((a, b) => a.id - b.id);
   }
-  if (records.length > max) records = records.slice(records.length - max);
   const lastRecord = records[records.length - 1];
-  return { ...stream, records, lastId: lastRecord ? Math.max(stream.lastId, lastRecord.id) : stream.lastId };
+  const next: StreamState = { ...stream, records, lastId: lastRecord ? Math.max(stream.lastId, lastRecord.id) : stream.lastId };
+  if (records.length > max) {
+    next.records = records.slice(records.length - max);
+    next.truncated = true;
+  }
+  return next;
 }
 
 function upsertSessions(current: Record<string, Session>, sessions: Session[]): Record<string, Session> {
@@ -172,7 +176,10 @@ export function reducer(state: AppState, action: Action): AppState {
       const key = task_id ? streamKeyForTask(task_id) : session_id ? streamKeyForSession(session_id) : null;
       if (!key) return state;
       const stream = mergeRecords(state.streams[key] ?? EMPTY_STREAM, events ?? []);
-      return { ...state, streams: { ...state.streams, [key]: { ...stream, loaded: true } } };
+      // Trường tùy chọn: backend có thể chưa gửi.
+      const next: StreamState = { ...stream, loaded: true };
+      if ((action.payload as { truncated?: boolean }).truncated === true) next.truncated = true;
+      return { ...state, streams: { ...state.streams, [key]: next } };
     }
 
     case "session.event": {
@@ -245,6 +252,14 @@ export function reducer(state: AppState, action: Action): AppState {
       if (!state.permissions[action.requestId]) return state;
       const { [action.requestId]: _removed, ...rest } = state.permissions;
       return { ...state, permissions: rest };
+    }
+
+    case "local/drop-streams": {
+      const drop = action.keys.filter((k) => k in state.streams);
+      if (drop.length === 0) return state;
+      const streams = { ...state.streams };
+      for (const k of drop) delete streams[k];
+      return { ...state, streams };
     }
 
     case "local/reset":

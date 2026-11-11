@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { BUS_MCP_SERVER_NAME, WORKER_TOOLS, busToolFullName } from "@claude-bridge/protocol";
 import type { SlotConfig } from "./config.js";
+import { liveResources } from "./liveResources.js";
 
 const MCP_CONFIG_FILE_NAME = "mcp-config.json";
 /** Owner read/write only. Ignored on Windows, where %TEMP% is already private to the user profile. */
@@ -12,7 +13,7 @@ const PRIVATE_DIR_PREFIX = "claude-bridge-task-";
 
 export interface McpConfigFile {
   path: string;
-  /** Removes the temp directory. Never throws. */
+  /** Removes the temp directory. Never throws; if removal fails, the runner retries at exit. */
   dispose(): Promise<void>;
 }
 
@@ -23,6 +24,7 @@ export interface McpConfigFile {
  */
 export async function writeMcpConfigFile(mcpUrl: string, taskToken: string): Promise<McpConfigFile> {
   const dir = await mkdtemp(path.join(os.tmpdir(), PRIVATE_DIR_PREFIX));
+  liveResources.addTempDir(dir);
   const filePath = path.join(dir, MCP_CONFIG_FILE_NAME);
   const content = {
     mcpServers: {
@@ -36,13 +38,22 @@ export async function writeMcpConfigFile(mcpUrl: string, taskToken: string): Pro
   try {
     await writeFile(filePath, JSON.stringify(content), { encoding: "utf8", mode: PRIVATE_FILE_MODE, flag: "wx" });
   } catch (err) {
-    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    await removeDir(dir);
     throw err;
   }
   return {
     path: filePath,
-    dispose: () => rm(dir, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined),
+    dispose: () => removeDir(dir),
   };
+}
+
+async function removeDir(dir: string): Promise<void> {
+  try {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3 });
+    liveResources.removeTempDir(dir);
+  } catch {
+    // Stays registered: LiveResources.cleanupSync deletes it before the runner exits.
+  }
 }
 
 /** allowed_tools from the slot plus the three worker bus tools, deduplicated, order kept. */

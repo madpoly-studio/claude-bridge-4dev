@@ -33,9 +33,15 @@ export function connectBusToHub({ hub, core, bus, eventLog, status }: BusBridgeD
     const task = bus.getTask(payload.task_id);
     if (!task) throw new WsError("NOT_FOUND", `task ${payload.task_id} not found`);
     // Đọc lịch sử và đăng ký nhận live trong cùng một tick → không lọt / trùng event.
-    const events = eventLog.readSessionEvents({ task_id: task.task_id, since: payload.since ?? 0 });
+    const { events, truncated } = eventLog.readSessionHistory({ task_id: task.task_id, since: payload.since ?? 0 });
     client.openTask(task.task_id);
-    client.send("session.history", { session_id: task.session_id, task_id: task.task_id, events });
+    client.send("session.history", {
+      session_id: task.session_id,
+      task_id: task.task_id,
+      events,
+      truncated,
+      first_id: events[0]?.id ?? null,
+    });
     return { task };
   });
 

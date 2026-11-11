@@ -169,11 +169,38 @@ function locate(input: Obj, keys: readonly string[]): { holder: "root" | "fields
   return k ? { holder: "additional", key: k } : null;
 }
 
-/** Ghi các chỉnh sửa vào bản sao input, giữ đúng vị trí và định dạng khóa gốc. */
-export function applyDraftEdits(input: Record<string, unknown>, edits: DraftEdits): Record<string, unknown> {
+/** Các trường người dùng thực sự đổi so với giá trị ban đầu của form. */
+export function changedEdits(initial: DraftEdits, current: DraftEdits): Partial<DraftEdits> {
+  const out: Partial<DraftEdits> = {};
+  if (current.summary !== initial.summary) out.summary = current.summary;
+  if (current.description !== initial.description) out.description = current.description;
+  const sameLabels = current.labels.length === initial.labels.length && current.labels.every((l, i) => l === initial.labels[i]);
+  if (!sameLabels) out.labels = current.labels;
+  return out;
+}
+
+function isAdfDoc(v: unknown): v is Obj {
+  return isObj(v) && v.type === "doc" && Array.isArray(v.content);
+}
+
+/** Văn bản thuần → ADF tối giản (mỗi dòng một paragraph), khớp cách adfText đọc ngược. */
+function textToAdf(text: string): Obj {
+  return {
+    type: "doc",
+    version: 1,
+    content: text.split(/\r?\n/).map((line) => ({ type: "paragraph", content: line ? [{ type: "text", text: line }] : [] })),
+  };
+}
+
+/**
+ * Ghi các trường có trong `edits` vào bản sao input, giữ đúng vị trí và định dạng khóa gốc.
+ * Trường không có trong `edits` được giữ nguyên (kể cả kiểu: ADF, chuỗi label...).
+ */
+export function applyDraftEdits(input: Record<string, unknown>, edits: Partial<DraftEdits>): Record<string, unknown> {
   const out: Obj = structuredCloneSafe(input);
   const additionalWasString = typeof out.additional_fields === "string";
   let additional = parseMaybeJson(out.additional_fields);
+  let additionalChanged = false;
 
   const write = (keys: readonly string[], value: unknown, fallbackKey: string) => {
     const loc = locate(out, keys);
@@ -186,18 +213,23 @@ export function applyDraftEdits(input: Record<string, unknown>, edits: DraftEdit
     if (loc.holder === "root") out[loc.key] = value;
     else if (loc.holder === "additional") {
       additional = { ...(additional ?? {}), [loc.key]: value };
+      additionalChanged = true;
     } else {
       out[loc.holder] = { ...(out[loc.holder] as Obj), [loc.key]: value };
     }
   };
 
-  write(TITLE_KEYS, edits.summary, "summary");
-  write(DESCRIPTION_KEYS, edits.description, "description");
-  const labelsLoc = locate(out, ["labels"]);
-  const existingLabels = labelsLoc ? pick(layers(out), ["labels"]) : undefined;
-  write(["labels"], typeof existingLabels === "string" ? edits.labels.join(",") : edits.labels, "labels");
+  if (edits.summary !== undefined) write(TITLE_KEYS, edits.summary, "summary");
+  if (edits.description !== undefined) {
+    const existing = pick(layers(out), DESCRIPTION_KEYS);
+    write(DESCRIPTION_KEYS, isAdfDoc(existing) ? textToAdf(edits.description) : edits.description, "description");
+  }
+  if (edits.labels !== undefined) {
+    const existingLabels = pick(layers(out), ["labels"]);
+    write(["labels"], typeof existingLabels === "string" ? edits.labels.join(",") : edits.labels, "labels");
+  }
 
-  if (additional) out.additional_fields = additionalWasString ? JSON.stringify(additional) : additional;
+  if (additional && additionalChanged) out.additional_fields = additionalWasString ? JSON.stringify(additional) : additional;
   return out;
 }
 

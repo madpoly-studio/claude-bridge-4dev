@@ -73,7 +73,8 @@ export class SessionStore {
     this.db.prepare("UPDATE sessions SET state = ? WHERE session_id = ?").run(state, sessionId);
   }
 
-  setClaudeSessionId(sessionId: string, claudeSessionId: string): void {
+  /** null = quên conversation cũ: lần spawn sau bắt đầu conversation mới thay vì resume. */
+  setClaudeSessionId(sessionId: string, claudeSessionId: string | null): void {
     this.db.prepare("UPDATE sessions SET claude_session_id = ? WHERE session_id = ?").run(claudeSessionId, sessionId);
   }
 

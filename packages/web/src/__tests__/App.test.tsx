@@ -71,6 +71,26 @@ describe("App (demo mode)", () => {
     expect(screen.getByText("assign_task sẽ bị từ chối. Task đang chạy không bị ảnh hưởng.")).toBeTruthy();
   });
 
+  it("màn hình kết nối: \"Ghi nhớ trên máy này\" mặc định tắt; token cũ trong localStorage thì bật, bỏ chọn thì xóa", () => {
+    localStorage.clear();
+    sessionStorage.clear();
+    render(<App demo={false} />);
+    expect((screen.getByLabelText(/Ghi nhớ trên máy này/) as HTMLInputElement).checked).toBe(false);
+    cleanup();
+
+    localStorage.setItem("claude-bridge.token", "legacy");
+    render(<App demo={false} />);
+    const box = screen.getByLabelText(/Ghi nhớ trên máy này/) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    expect((screen.getByLabelText("Pairing token") as HTMLInputElement).value).toBe("legacy");
+    fireEvent.click(box);
+    expect(box.checked).toBe(false);
+    expect(localStorage.getItem("claude-bridge.token")).toBeNull();
+    expect(sessionStorage.getItem("claude-bridge.token")).toBe("legacy");
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
   it("không có demo và chưa có token: hiện màn hình kết nối", () => {
     render(<App demo={false} />);
     expect(screen.getByRole("button", { name: "Kết nối" })).toBeTruthy();

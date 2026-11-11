@@ -38,7 +38,7 @@ async function callOrchestratorTool(name: string, args: Record<string, unknown>)
   const res = await fetch(bridge.mcpUrl(), {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${bridge.tokens.getOrchestratorToken()}`,
+      Authorization: `Bearer ${bridge.tokens.getOrchestratorToken("E2E")}`,
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
     },

@@ -6,6 +6,7 @@ import { ClaudeProcess, SpawnError, type ClaudeExit } from "./claudeProcess.js";
 import { BOOTSTRAP_TOKEN_ENV, type SlotConfig } from "./config.js";
 import { EventForwarder } from "./eventForwarder.js";
 import { errorMessage, type Logger } from "./logger.js";
+import type { KillTreeFn } from "./processTree.js";
 import { AbortedError, graceSignal, retry } from "./retry.js";
 import { busMcpStatus, initSessionId, isResultEvent, parseJsonObjectLine, usageFromResult } from "./streamJson.js";
 import type { RunnerTimings } from "./timings.js";
@@ -16,6 +17,7 @@ const EXIT_MESSAGE_STDERR_CHARS = 1000;
 /** setTimeout cannot represent longer delays (about 24.8 days). */
 const MAX_TIMER_MS = 2_147_483_647;
 const SHUTDOWN_MESSAGE = "runner shutdown";
+const STUCK_MESSAGE = "process did not terminate after kill";
 
 /** "shutdown" is reported as reason null so the bus records no_terminal_report. */
 export type KillReason = "timeout" | "cancelled" | "shutdown";
@@ -28,6 +30,13 @@ export interface TaskRunOptions {
   timings: RunnerTimings;
   shutdownSignal: AbortSignal;
   logger: Logger;
+  /** Defaults to killProcessTree; tests inject a failing one. */
+  killTree?: KillTreeFn;
+}
+
+export interface TaskRunOutcome {
+  /** Set when the process outlived the kill deadline: the slot must take no new task until it is gone. */
+  stuckProcess: ClaudeProcess | null;
 }
 
 export class TaskRun {
@@ -37,29 +46,46 @@ export class TaskRun {
   private readonly reportGrace: { signal: AbortSignal; dispose: () => void };
   private killRequest: { reason: KillReason; message: string } | null = null;
   private process: ClaudeProcess | null = null;
+  private stuckProcess: ClaudeProcess | null = null;
+  private killDeadlineTimer: NodeJS.Timeout | undefined;
+  private readonly killDeadline: { passed: Promise<void>; pass: () => void };
 
   constructor(private readonly options: TaskRunOptions) {
     this.taskId = options.assignment.task.task_id;
     this.logger = options.logger;
     this.reportGrace = graceSignal(options.shutdownSignal, options.timings.shutdownGraceMs);
+    let pass = (): void => undefined;
+    const passed = new Promise<void>((resolve) => {
+      pass = resolve;
+    });
+    this.killDeadline = { passed, pass };
   }
 
   private get reportSignal(): AbortSignal {
     return this.reportGrace.signal;
   }
 
-  /** Requests termination; the first reason wins. Safe to call at any stage. */
+  /**
+   * Requests termination; the first reason wins. Safe to call at any stage. A no-op once the process has
+   * exited by itself: a run that finished is reported as finished, whatever arrives while it is reported.
+   */
   kill(reason: KillReason, message: string): void {
     if (this.killRequest) {
       return;
     }
+    if (this.process?.hasExited) {
+      this.logger.debug("stop request after the process exited, ignoring", { reason });
+      return;
+    }
     this.killRequest = { reason, message };
     this.logger.warn("stopping task", { reason, message });
-    void this.process?.kill();
+    if (this.process) {
+      this.killProcess(this.process);
+    }
   }
 
   /** Runs to completion and reports `exited`. Never throws. */
-  async execute(): Promise<void> {
+  async execute(): Promise<TaskRunOutcome> {
     const onShutdown = (): void => this.kill("shutdown", SHUTDOWN_MESSAGE);
     if (this.options.shutdownSignal.aborted) {
       onShutdown();
@@ -75,10 +101,27 @@ export class TaskRun {
       }
       await this.report("exited", (signal) => this.options.client.exited(this.taskId, exit, signal));
       this.logger.info("task finished", { exit_code: exit.exit_code, reason: exit.reason ?? null });
+      return { stuckProcess: this.stuckProcess };
     } finally {
+      clearTimeout(this.killDeadlineTimer);
       this.options.shutdownSignal.removeEventListener("abort", onShutdown);
       this.reportGrace.dispose();
     }
+  }
+
+  /** Kills the tree and starts the deadline after which a still-running process is reported as stuck. */
+  private killProcess(proc: ClaudeProcess): void {
+    void proc.kill();
+    if (this.killDeadlineTimer === undefined) {
+      this.killDeadlineTimer = setTimeout(() => this.killDeadline.pass(), this.options.timings.killDeadlineMs);
+    }
+  }
+
+  /** The process exit, or null if a kill was requested and the process outlived the kill deadline. */
+  private async waitForExit(proc: ClaudeProcess): Promise<ClaudeExit | null> {
+    const exit = await Promise.race([proc.exited, this.killDeadline.passed.then(() => null)]);
+    clearTimeout(this.killDeadlineTimer);
+    return exit;
   }
 
   private async run(): Promise<TaskExitedRequest> {
@@ -122,6 +165,8 @@ export class TaskRun {
       logger: this.logger,
     });
     let lastResult: Record<string, unknown> | null = null;
+    /** Off once the run is reported stuck: nothing may be posted after `exited`. */
+    let forwarding = true;
     let started: Promise<void> | null = null;
     let fallbackTimer: NodeJS.Timeout | undefined;
     const requestStarted = (sessionId: string | null): void => {
@@ -142,8 +187,13 @@ export class TaskRun {
         prompt: assignment.prompt,
         killGraceMs: timings.killGraceMs,
         stdioDrainMs: timings.stdioDrainMs,
+        descendantScanMs: timings.descendantScanMs,
         logger: this.logger,
+        killTree: this.options.killTree,
         onLine: (line) => {
+          if (!forwarding) {
+            return;
+          }
           const event = parseJsonObjectLine(line);
           if (!event) {
             forwarder.push({ type: "raw", text: line });
@@ -170,7 +220,7 @@ export class TaskRun {
     this.process = proc;
     this.logger.info("claude started", { pid: proc.pid, timeout_s: assignment.timeout_seconds });
     if (this.killRequest) {
-      void proc.kill();
+      this.killProcess(proc);
     }
 
     fallbackTimer = setTimeout(() => {
@@ -182,25 +232,36 @@ export class TaskRun {
       Math.min(assignment.timeout_seconds * 1000, MAX_TIMER_MS),
     );
 
-    const exit = await proc.exited;
+    const exit = await this.waitForExit(proc);
     clearTimeout(fallbackTimer);
     clearTimeout(timeoutTimer);
+    if (!exit) {
+      forwarding = false;
+      this.stuckProcess = proc;
+      this.logger.error("claude process did not terminate after kill", { pid: proc.pid, deadline_ms: timings.killDeadlineMs });
+    }
     // The process did run; the bus needs `started` before events and exited make sense.
     requestStarted(null);
     await started;
     const delivery = await forwarder.close();
-    return this.exitRequest(exit, usageFromResult(lastResult), delivery.dropped);
+    const usage = usageFromResult(lastResult);
+    const result = exit ? this.exitRequest(exit, usage) : this.stuckExit(usage);
+    if (delivery.dropped > 0) {
+      result.message = `${result.message ? `${result.message}; ` : ""}${delivery.dropped} stream event(s) were not delivered`;
+    }
+    return result;
   }
 
-  private exitRequest(exit: ClaudeExit, usage: TaskExitedRequest["usage"], dropped: number): TaskExitedRequest {
+  /** killRequest is only ever set before the exit (kill() ignores later requests), so it names the real cause. */
+  private exitRequest(exit: ClaudeExit, usage: TaskExitedRequest["usage"]): TaskExitedRequest {
     if (exit.code !== 0 && !this.killRequest && exit.stderrTail.trim()) {
       this.logger.warn("claude exited with error", { code: exit.code, signal: exit.signal, stderr_tail: exit.stderrTail.trim() });
     }
-    const result = this.killRequest ? this.killedExit(exit.code, usage) : this.normalExit(exit, usage);
-    if (dropped > 0) {
-      result.message = `${result.message ? `${result.message}; ` : ""}${dropped} stream event(s) were not delivered`;
-    }
-    return result;
+    return this.killRequest ? this.killedExit(exit.code, usage) : this.normalExit(exit, usage);
+  }
+
+  private stuckExit(usage: TaskExitedRequest["usage"]): TaskExitedRequest {
+    return { ...this.killedExit(null, usage), message: STUCK_MESSAGE };
   }
 
   private normalExit(exit: ClaudeExit, usage: TaskExitedRequest["usage"]): TaskExitedRequest {

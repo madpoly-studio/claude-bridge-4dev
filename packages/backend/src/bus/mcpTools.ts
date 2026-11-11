@@ -12,7 +12,8 @@ import { z } from "zod";
 import { BusError } from "./errors.js";
 import type { TaskBus } from "./taskBus.js";
 
-export type McpPrincipal = { role: "orchestrator" } | { role: "worker"; task_id: string };
+/** Orchestrator: chỉ thao tác trên ticket `<project>-*` (mục 7.6). Worker: chỉ task của task token. */
+export type McpPrincipal = { role: "orchestrator"; project: string } | { role: "worker"; task_id: string };
 
 type ToolName = OrchestratorToolName | WorkerToolName;
 
@@ -32,6 +33,22 @@ function tool<S extends z.ZodObject>(
   run: (input: z.output<S>, principal: McpPrincipal) => unknown,
 ): BusTool {
   return { name, description, schema, run: (input, principal) => run(input as z.output<S>, principal) };
+}
+
+function orchestratorProject(principal: McpPrincipal): string {
+  // Không xảy ra: dispatcher đã chặn theo role trước khi gọi.
+  if (principal.role !== "orchestrator") throw new BusError("FORBIDDEN", "orchestrator tool requires an orchestrator token");
+  return principal.project;
+}
+
+function inProject(project: string, ticketKey: string): boolean {
+  return ticketKey.startsWith(`${project}-`);
+}
+
+function requireTicketInProject(project: string, ticketKey: string): void {
+  if (!inProject(project, ticketKey)) {
+    throw new BusError("FORBIDDEN", `ticket ${ticketKey} does not belong to project ${project}`);
+  }
 }
 
 function workerTaskId(principal: McpPrincipal): string {
@@ -55,19 +72,30 @@ export function buildBusTools(bus: TaskBus): Map<ToolName, BusTool> {
         state: z.enum(["assigned", "running", "completed", "failed", "cancelled"]).optional(),
         ticket_key: z.string().min(1).optional(),
       }),
-      (input) => bus.listTasks(input),
+      (input, p) => {
+        const project = orchestratorProject(p);
+        return bus.listTasks(input).filter((t) => inProject(project, t.ticket_key));
+      },
     ),
     tool(
       "assign_task",
       "Assign a Jira ticket to an idle worker. Fails with WORKER_NOT_IDLE, TICKET_ALREADY_ACTIVE, CONCURRENCY_LIMIT or DISPATCH_PAUSED.",
       z.object({ worker_id: text(128), ticket_key: text(64), notes: z.string().max(8000).optional() }),
-      (input) => bus.assignTask(input),
+      (input, p) => {
+        requireTicketInProject(orchestratorProject(p), input.ticket_key);
+        return bus.assignTask(input);
+      },
     ),
     tool(
       "cancel_task",
       "Cancel an active task; the runner kills the worker process.",
       z.object({ task_id: text(64), reason: text(2000) }),
-      (input) => bus.cancelTask(input),
+      (input, p) => {
+        const task = bus.getTask(input.task_id);
+        // Task không tồn tại: để bus trả lỗi NOT_FOUND như cũ.
+        if (task) requireTicketInProject(orchestratorProject(p), task.ticket_key);
+        return bus.cancelTask(input);
+      },
     ),
     tool(
       "report_progress",
@@ -80,8 +108,8 @@ export function buildBusTools(bus: TaskBus): Map<ToolName, BusTool> {
     ),
     tool(
       "complete_task",
-      "Finish your task successfully with the merge request URL, branch and a short summary.",
-      z.object({ mr_url: z.url().max(2000), branch: text(256), summary: text(8000) }),
+      "Finish your task successfully with the merge request URL (http/https), branch and a short summary.",
+      z.object({ mr_url: z.url({ protocol: /^https?$/ }).max(2000), branch: text(256), summary: text(8000) }),
       (input, p) => {
         bus.completeTask(workerTaskId(p), input);
         return { ok: true };

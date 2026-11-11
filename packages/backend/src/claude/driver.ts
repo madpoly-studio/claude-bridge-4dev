@@ -28,8 +28,8 @@ export type ClaudeSessionOptions = Pick<
 export interface ClaudeSessionHandle {
   /** Luồng message của session; kết thúc khi process thoát, throw khi process chết bất thường. */
   readonly messages: AsyncIterable<SDKMessage>;
-  /** Đưa một user turn vào prompt streaming. Không có tác dụng sau `close()`. */
-  send(text: string): void;
+  /** Đưa một user turn vào prompt streaming. false (không gửi) sau `close()` hoặc khi process đã thoát. */
+  send(text: string): boolean;
   /** Ngắt turn đang chạy (Query.interrupt). Session vẫn sống để nhận turn tiếp. */
   interrupt(): Promise<void>;
   /** Đóng prompt và kết thúc process. */

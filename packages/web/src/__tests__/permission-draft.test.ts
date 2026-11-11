@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyDraftEdits, draftFromInput, editsFromInput, splitAcceptance } from "../state/permission-draft";
+import { applyDraftEdits, changedEdits, draftFromInput, editsFromInput, splitAcceptance } from "../state/permission-draft";
 
 describe("draftFromInput", () => {
   it("đọc input dạng mcp-atlassian (additional_fields là chuỗi JSON)", () => {
@@ -75,5 +75,43 @@ describe("applyDraftEdits", () => {
 
   it("editsFromInput lấy giá trị ban đầu cho form", () => {
     expect(editsFromInput({ summary: "S", description: "D", labels: ["a"] })).toEqual({ summary: "S", description: "D", labels: ["a"] });
+  });
+});
+
+describe("Sửa chỉ ghi trường đã đổi", () => {
+  const adf = { type: "doc", version: 1, content: [{ type: "paragraph", content: [{ type: "text", text: "Mô tả", marks: [{ type: "strong" }] }] }] };
+
+  it("changedEdits chỉ trả trường khác giá trị ban đầu", () => {
+    const initial = { summary: "A", description: "D", labels: ["x"] };
+    expect(changedEdits(initial, { ...initial })).toEqual({});
+    expect(changedEdits(initial, { ...initial, summary: "B" })).toEqual({ summary: "B" });
+    expect(changedEdits(initial, { ...initial, labels: ["x", "y"] })).toEqual({ labels: ["x", "y"] });
+  });
+
+  it("chỉ đổi tiêu đề: mô tả ADF giữ nguyên, không thêm khóa labels", () => {
+    const input = { fields: { summary: "Cũ", description: adf, project: { key: "SH" } } };
+    const initial = editsFromInput(input);
+    const out = applyDraftEdits(input, changedEdits(initial, { ...initial, summary: "Mới" }));
+    expect(out).toEqual({ fields: { summary: "Mới", description: adf, project: { key: "SH" } } });
+    expect("labels" in (out.fields as object)).toBe(false);
+  });
+
+  it("không đổi gì: kết quả giống hệt input, additional_fields chuỗi giữ nguyên văn", () => {
+    const input = { summary: "S", description: "D", additional_fields: '{"priority":  "High"}' };
+    const initial = editsFromInput(input);
+    expect(applyDraftEdits(input, changedEdits(initial, initial))).toEqual(input);
+  });
+
+  it("sửa mô tả khi gốc là ADF: ghi lại dạng ADF", () => {
+    const out = applyDraftEdits({ description: adf }, { description: "Dòng 1\nDòng 2" });
+    expect(out.description).toEqual({
+      type: "doc",
+      version: 1,
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "Dòng 1" }] },
+        { type: "paragraph", content: [{ type: "text", text: "Dòng 2" }] },
+      ],
+    });
+    expect(editsFromInput(out).description).toBe("Dòng 1\nDòng 2");
   });
 });

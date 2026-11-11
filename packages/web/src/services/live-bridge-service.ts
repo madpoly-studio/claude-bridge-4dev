@@ -4,14 +4,15 @@ import type { ClientMessageType, ClientPayloads, ServerMessage, Session } from "
 import { STORAGE_KEYS } from "../config";
 import { newId } from "../lib/id";
 import { writeStorage, readStorage } from "../lib/storage";
+import { loadToken, saveToken } from "../lib/token-storage";
 import { draftFromInput } from "../state/permission-draft";
-import { streamKeyForSession, streamKeyForTask } from "../state/reducer";
-import { orchestratorSession, pickDefaultPlannerSession, plannerSessions } from "../state/selectors";
+import { streamKeyForRecord, streamKeyForSession, streamKeyForTask } from "../state/reducer";
+import { displayedStreamKeys, orchestratorSession, pickDefaultPlannerSession, plannerSessions } from "../state/selectors";
 import type { Store } from "../state/store";
 import type { NoticeKind } from "../state/types";
 import { BridgeClient, BridgeRequestError } from "../ws/client";
 import type { TransportFactory } from "../ws/transport";
-import type { BridgeActions, PermissionResponse } from "./bridge-actions";
+import type { BridgeActions, ConnectOptions, PermissionResponse } from "./bridge-actions";
 import { showBrowserNotification } from "./notifier";
 
 export interface LiveServiceOptions {
@@ -44,9 +45,10 @@ export class LiveBridgeService implements BridgeActions {
     private readonly options: LiveServiceOptions = {},
   ) {}
 
-  connect(url: string, token: string): void {
+  connect(url: string, token: string, options: ConnectOptions = {}): void {
     writeStorage(STORAGE_KEYS.wsUrl, url);
-    writeStorage(STORAGE_KEYS.token, token);
+    // Không nói rõ thì giữ nguyên nơi đang lưu token (sessionStorage mặc định, localStorage nếu đã chọn ghi nhớ).
+    saveToken(token, options.remember ?? loadToken().remember);
     const changed = !this.currentTarget || this.currentTarget.url !== url || this.currentTarget.token !== token;
     this.client?.stop();
     if (changed) this.store.dispatch({ type: "local/reset" });
@@ -84,6 +86,7 @@ export class LiveBridgeService implements BridgeActions {
   async selectPlannerSession(sessionId: string): Promise<boolean> {
     this.store.dispatch({ type: "local/select-planner", sessionId });
     writeStorage(STORAGE_KEYS.plannerSession, sessionId);
+    this.releaseHiddenStreams();
     return this.openSessionStream(sessionId);
   }
 
@@ -123,6 +126,7 @@ export class LiveBridgeService implements BridgeActions {
 
   async openTask(taskId: string | null): Promise<boolean> {
     this.store.dispatch({ type: "local/open-task", taskId });
+    this.releaseHiddenStreams();
     if (!taskId) return true;
     return this.openTaskStream(taskId);
   }
@@ -138,6 +142,9 @@ export class LiveBridgeService implements BridgeActions {
   // ------------------------------------------------------------------ internals
 
   private handleMessage(msg: ServerMessage): void {
+    // Backend vẫn đẩy event của luồng đã mở trước đó (chưa có session.unsubscribe/task.close):
+    // bỏ qua luồng không còn hiển thị để bộ nhớ không tăng mãi.
+    if (!this.isDisplayedStream(msg)) return;
     const live = this.store.getState().connection.phase === "live";
     this.store.dispatch(msg);
     switch (msg.type) {
@@ -176,6 +183,32 @@ export class LiveBridgeService implements BridgeActions {
     }
   }
 
+  private isDisplayedStream(msg: ServerMessage): boolean {
+    let key: string | null;
+    if (msg.type === "session.event") {
+      if (typeof msg.payload?.id !== "number") return true;
+      key = streamKeyForRecord(msg.payload);
+    } else if (msg.type === "session.history") {
+      const { session_id, task_id } = msg.payload;
+      key = task_id ? streamKeyForTask(task_id) : session_id ? streamKeyForSession(session_id) : null;
+    } else {
+      return true;
+    }
+    return key === null || displayedStreamKeys(this.store.getState()).has(key);
+  }
+
+  /**
+   * Bỏ luồng không còn hiển thị (giữ planner đang chọn, orchestrator, task đang mở) và xóa dấu "đã mở"
+   * để lần mở lại tải lịch sử từ đầu.
+   */
+  private releaseHiddenStreams(): void {
+    const state = this.store.getState();
+    const keep = displayedStreamKeys(state);
+    for (const key of [...this.opened]) if (!keep.has(key)) this.opened.delete(key);
+    const drop = Object.keys(state.streams).filter((key) => !keep.has(key));
+    if (drop.length > 0) this.store.dispatch({ type: "local/drop-streams", keys: drop });
+  }
+
   private resetOpened(): void {
     this.opened.clear();
     this.orchestratorOpenedId = null;
@@ -204,7 +237,10 @@ export class LiveBridgeService implements BridgeActions {
   private ensureOrchestratorOpen(): void {
     const orch = orchestratorSession(this.store.getState());
     if (!orch || orch.session_id === this.orchestratorOpenedId) return;
+    const switched = this.orchestratorOpenedId !== null;
     this.orchestratorOpenedId = orch.session_id;
+    // Đổi project → orchestrator khác: bỏ luồng của orchestrator cũ.
+    if (switched) this.releaseHiddenStreams();
     void this.openSessionStream(orch.session_id);
   }
 

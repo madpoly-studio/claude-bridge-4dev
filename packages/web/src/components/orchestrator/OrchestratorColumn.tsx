@@ -52,6 +52,7 @@ export function OrchestratorColumn() {
         <ChatStream
           records={stream.records}
           loaded={stream.loaded}
+          truncated={stream.truncated}
           speaker="orchestrator"
           options={STREAM_OPTIONS}
           emptyText="Orchestrator chưa có hoạt động."

@@ -6,6 +6,7 @@ import { cx } from "../../lib/cx";
 import { basename, durationBetween, formatClock, formatDuration, formatTokens, mrLabel } from "../../lib/format";
 import { TASK_STATE_LABEL } from "../../state/event-format";
 import { taskStream, ticketUrl, totalTokens } from "../../state/selectors";
+import { ExternalLink } from "../common/ExternalLink";
 import { Modal } from "../common/Modal";
 import { PhaseBar } from "../common/PhaseBar";
 import ui from "../common/ui.module.css";
@@ -120,17 +121,17 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
         {task.summary && task.state === "completed" && <p className={styles.note}>{task.summary}</p>}
 
         <div className={styles.links}>
-          {jiraUrl ? (
-            <a href={jiraUrl} target="_blank" rel="noreferrer" className={ui.btn}>
-              Mở ticket trên Jira
-            </a>
-          ) : (
-            <span className={styles.placeholderLink}>Jira: chưa biết URL</span>
-          )}
+          <ExternalLink href={jiraUrl} className={ui.btn} fallback={<span className={styles.placeholderLink}>Jira: chưa biết URL</span>}>
+            Mở ticket trên Jira
+          </ExternalLink>
           {task.mr_url ? (
-            <a href={task.mr_url} target="_blank" rel="noreferrer" className={ui.btn}>
+            <ExternalLink
+              href={task.mr_url}
+              className={ui.btn}
+              fallback={<span className={styles.placeholderLink}>Merge request (link không hợp lệ): {task.mr_url}</span>}
+            >
               Merge request {mrLabel(task.mr_url).replace(/^MR\s*/, "")}
-            </a>
+            </ExternalLink>
           ) : (
             <span className={styles.placeholderLink}>Merge request: chưa có</span>
           )}
@@ -138,7 +139,7 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
 
         <div className={styles.section}>
           <span className={ui.sectionLabel}>Luồng session</span>
-          <SessionLog records={stream.records} loaded={stream.loaded} />
+          <SessionLog records={stream.records} loaded={stream.loaded} truncated={stream.truncated} />
           <span className={styles.note}>Chỉ xem. Lệnh cho worker đi qua orchestrator.</span>
         </div>
       </div>

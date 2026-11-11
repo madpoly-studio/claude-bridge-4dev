@@ -1,7 +1,8 @@
-import { useId, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { cx } from "../../lib/cx";
-import { applyDraftEdits, editsFromInput, parseLabels } from "../../state/permission-draft";
+import { applyDraftEdits, changedEdits, editsFromInput, parseLabels } from "../../state/permission-draft";
+import type { DraftEdits } from "../../state/permission-draft";
 import ui from "../common/ui.module.css";
 import styles from "./planner.module.css";
 
@@ -15,19 +16,30 @@ interface PermissionEditFormProps {
 /** Sửa bản nháp: các trường chính, hoặc JSON thô khi input có shape lạ. */
 export function PermissionEditForm({ input, submitting, onSubmit, onCancel }: PermissionEditFormProps) {
   const id = useId();
-  const initial = editsFromInput(input);
+  const initial = useMemo(() => editsFromInput(input), [input]);
   const [summary, setSummary] = useState(initial.summary);
   const [description, setDescription] = useState(initial.description);
-  const [labels, setLabels] = useState(initial.labels.join(", "));
+  const initialLabelsText = initial.labels.join(", ");
+  const [labels, setLabels] = useState(initialLabelsText);
   const [rawMode, setRawMode] = useState(false);
   const [raw, setRaw] = useState(() => JSON.stringify(input, null, 2));
   const [error, setError] = useState<string | null>(null);
 
+  /** Chỉ các trường người dùng đã đổi trên form; trường không đổi giữ nguyên giá trị/kiểu gốc trong input. */
+  const formChanges = (): Partial<DraftEdits> =>
+    changedEdits(initial, {
+      summary,
+      description,
+      // Ô label chưa đụng tới thì coi như không đổi (tránh tách sai label chứa dấu phẩy).
+      labels: labels === initialLabelsText ? initial.labels : parseLabels(labels),
+    });
+
   const toggleRaw = () => {
     setError(null);
     if (!rawMode) {
-      // Mang các chỉnh sửa hiện tại sang JSON để không mất.
-      setRaw(JSON.stringify(applyDraftEdits(input, { summary, description, labels: parseLabels(labels) }), null, 2));
+      // JSON thô bắt đầu từ input gốc; chỉ mang sang các trường đã sửa trên form (nếu có).
+      const changes = formChanges();
+      if (Object.keys(changes).length > 0) setRaw(JSON.stringify(applyDraftEdits(input, changes), null, 2));
     }
     setRawMode((v) => !v);
   };
@@ -51,7 +63,9 @@ export function PermissionEditForm({ input, submitting, onSubmit, onCancel }: Pe
       setError("Tiêu đề không được để trống.");
       return;
     }
-    onSubmit(applyDraftEdits(input, { summary: summary.trim(), description, labels: parseLabels(labels) }));
+    const changes = formChanges();
+    if (changes.summary !== undefined) changes.summary = changes.summary.trim();
+    onSubmit(applyDraftEdits(input, changes));
   };
 
   return (

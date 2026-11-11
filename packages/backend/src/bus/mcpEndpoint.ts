@@ -23,7 +23,8 @@ export function registerMcpEndpoint(app: FastifyInstance, deps: McpEndpointDeps)
   const resolvePrincipal = (header: string | string[] | undefined): McpPrincipal => {
     const token = bearerToken(header);
     if (!token) throw new BusError("UNAUTHORIZED", "missing bearer token");
-    if (deps.tokens.isOrchestratorToken(token)) return { role: "orchestrator" };
+    const project = deps.tokens.orchestratorProject(token);
+    if (project !== null) return { role: "orchestrator", project };
     const taskId = deps.bus.resolveTaskToken(token);
     if (taskId) return { role: "worker", task_id: taskId };
     throw new BusError("UNAUTHORIZED", "invalid bus token");

@@ -33,7 +33,7 @@ describe("Wake Dispatcher + orchestrator", () => {
     expect(opts.mcpServers?.[BUS_MCP_SERVER_NAME]).toEqual({
       type: "http",
       url: h.bridge.mcpUrl(),
-      headers: { Authorization: `Bearer ${h.bridge.tokens.getOrchestratorToken()}` },
+      headers: { Authorization: `Bearer ${h.bridge.tokens.getOrchestratorToken("SH")}` },
       alwaysLoad: true,
     });
     expect(opts.tools).toEqual(["ToolSearch"]);

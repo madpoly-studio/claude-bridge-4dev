@@ -18,7 +18,7 @@
   "agent_label": "agent",
   "claude_auth_mode": "subscription",
   "jira_create_tool_pattern": "(^|__)(create_issue|jira_create_issue|createJiraIssue|create_jira_issue)$",
-  "jira_env_file": "D:/repos/sh-game/.env",
+  "jira_env_file": "D:/secrets/team-jira.env",
   "claude_executable": null,
   "planner": {
     "mcp_servers": {

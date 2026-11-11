@@ -223,7 +223,7 @@ describe("Session Manager (planner)", () => {
       expect(outcomes[k], k).toMatchObject({ allowed: false, decided_by: "hook" });
     }
     expect(outcomes.read).toMatchObject({ allowed: true, decided_by: "auto" });
-    expect(outcomes.readOutside).toMatchObject({ allowed: false, decided_by: "canUseTool" });
+    expect(outcomes.readOutside).toMatchObject({ allowed: false, decided_by: "hook" });
     expect(outcomes.search).toMatchObject({ allowed: true, decided_by: "preapproved" });
     expect(outcomes.getIssue).toMatchObject({ allowed: true, decided_by: "canUseTool" });
 

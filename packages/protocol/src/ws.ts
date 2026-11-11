@@ -83,8 +83,19 @@ export interface ServerPayloads {
   /** Kết thúc replay sau subscribe. */
   "replay.done": { last_seq: number };
   "session.event": SessionEventRecord;
-  /** Gửi sau session.open / task.open: lịch sử trong một lô. */
-  "session.history": { session_id: string | null; task_id: string | null; events: SessionEventRecord[] };
+  /**
+   * Gửi sau session.open / task.open: lịch sử trong một lô — các event MỚI NHẤT có id > since (tối đa giới hạn của
+   * backend), tăng dần theo id.
+   */
+  "session.history": {
+    session_id: string | null;
+    task_id: string | null;
+    events: SessionEventRecord[];
+    /** true khi còn event cũ hơn (id > since) không được gửi vì vượt giới hạn: UI nên báo có khoảng trống. */
+    truncated?: boolean;
+    /** id của event đầu tiên (cũ nhất) trong `events`; null khi `events` rỗng. */
+    first_id?: number | null;
+  };
   "session.updated": Session;
   "worker.updated": Worker;
   "task.updated": Task;

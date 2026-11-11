@@ -6,6 +6,19 @@ import { RUNNER_BOOTSTRAP_TOKEN_FILE } from "./bus/tokens.js";
 import { BIND_HOST, ConfigError, loadConfig } from "./config.js";
 import { WS_PATH } from "./ws/hub.js";
 
+/** Exit code after an uncaught exception: state may be corrupt, let the supervisor restart the backend. */
+const EXIT_UNCAUGHT_EXCEPTION = 1;
+
+// Last-resort logging. A stray rejection is logged and the backend keeps serving (sessions, runners); an uncaught
+// exception leaves the process in an unknown state, so it is logged and the process exits.
+process.on("unhandledRejection", (reason: unknown) => {
+  console.error("unhandled promise rejection:", reason);
+});
+process.on("uncaughtException", (err: Error, origin: string) => {
+  console.error(`uncaught exception (${origin}):`, err);
+  process.exit(EXIT_UNCAUGHT_EXCEPTION);
+});
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const bridge = await createApp(config, { logger: { level: process.env.LOG_LEVEL ?? "info" } });

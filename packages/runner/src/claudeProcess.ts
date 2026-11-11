@@ -1,9 +1,12 @@
-// One headless claude child process: spawn, prompt on stdin, stdout lines out, stderr tail, exit, tree kill.
+// One headless claude child process: spawn, prompt on stdin, stdout lines out, stderr tail, exit, tree kill,
+// and cleanup of whatever it left running.
 import { spawn, type ChildProcess } from "node:child_process";
 import readline from "node:readline";
 import { planSpawn } from "./commandResolver.js";
+import { liveResources } from "./liveResources.js";
 import { errorMessage, type Logger } from "./logger.js";
-import { killProcessTree, treeSpawnOptions } from "./processTree.js";
+import { startOrphanReaper, type OrphanReaper } from "./orphanReaper.js";
+import { killProcessTree, treeSpawnOptions, type KillTreeFn } from "./processTree.js";
 
 const STDERR_TAIL_CHARS = 4096;
 
@@ -23,22 +26,44 @@ export interface ClaudeProcessOptions {
   onLine: (line: string) => void;
   killGraceMs: number;
   stdioDrainMs: number;
+  /** win32: interval of the process-tree snapshots used to find leftovers after exit. */
+  descendantScanMs: number;
   logger: Logger;
+  /** Defaults to killProcessTree; tests inject a failing one. */
+  killTree?: KillTreeFn;
 }
 
 export class SpawnError extends Error {}
 
 export class ClaudeProcess {
   readonly pid: number;
+  /**
+   * Resolves after the exit, once leftover descendants were killed and stdio drained (both bounded).
+   * Never resolves if the process never exits (a kill that did not work).
+   */
   readonly exited: Promise<ClaudeExit>;
   private stderrTail = "";
+  private exitSeen = false;
+  private readonly reaper: OrphanReaper;
 
   private constructor(
     private readonly child: ChildProcess,
     private readonly options: ClaudeProcessOptions,
+    spawnedAtMs: number,
   ) {
     this.pid = child.pid as number;
+    liveResources.addChild(this.pid);
+    this.reaper = startOrphanReaper(child, {
+      spawnedAtMs,
+      scanIntervalMs: options.descendantScanMs,
+      logger: options.logger,
+    });
     this.exited = this.watch();
+  }
+
+  /** True as soon as the OS reported the exit (before `exited` resolves). */
+  get hasExited(): boolean {
+    return this.exitSeen;
   }
 
   /** Spawns and waits for the OS to confirm the process started. Throws SpawnError otherwise. */
@@ -50,6 +75,7 @@ export class ClaudeProcess {
       throw new SpawnError(`cannot resolve claude command: ${errorMessage(err)}`);
     }
     let child: ChildProcess;
+    const spawnedAtMs = Date.now();
     try {
       child = spawn(plan.file, plan.args, {
         cwd: options.cwd,
@@ -71,15 +97,19 @@ export class ClaudeProcess {
     }
     child.on("error", (err) => options.logger.warn("claude process error", { error: err.message }));
 
-    const proc = new ClaudeProcess(child, options);
+    const proc = new ClaudeProcess(child, options, spawnedAtMs);
     // The prompt goes through stdin: no argv quoting issues on Windows, no length limit.
     child.stdin?.on("error", (err) => options.logger.debug("stdin closed early", { error: err.message }));
     child.stdin?.end(options.prompt, "utf8");
     return proc;
   }
 
+  /** Kills the tree. Never throws; resolving does not mean the process is gone (see `exited`). */
   kill(): Promise<void> {
-    return killProcessTree(this.child, this.options.killGraceMs, this.options.logger);
+    const killTree = this.options.killTree ?? killProcessTree;
+    return killTree(this.child, this.options.killGraceMs, this.options.logger).catch((err: unknown) => {
+      this.options.logger.warn("killing claude process tree failed", { pid: this.pid, error: errorMessage(err) });
+    });
   }
 
   private async watch(): Promise<ClaudeExit> {
@@ -110,8 +140,15 @@ export class ClaudeProcess {
     });
 
     const { code, signal } = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-      child.once("exit", (exitCode, exitSignal) => resolve({ code: exitCode, signal: exitSignal }));
+      child.once("exit", (exitCode, exitSignal) => {
+        this.exitSeen = true;
+        resolve({ code: exitCode, signal: exitSignal });
+      });
     });
+
+    // Before draining: a leftover holding stdout open is one of the things this kills.
+    await this.reaper.reap();
+    liveResources.removeChild(this.pid);
 
     // A grandchild that inherited stdout can keep the pipe open after claude exits; do not wait forever.
     let drainTimer: NodeJS.Timeout | undefined;

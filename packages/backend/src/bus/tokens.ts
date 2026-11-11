@@ -48,19 +48,37 @@ export function resolveRunnerBootstrapToken(configured: string | null, dataDir: 
   return token;
 }
 
-/** Token của bus: orchestrator (trong bộ nhớ, sinh mỗi lần khởi động) và bootstrap của runner. */
+/**
+ * Token của bus: orchestrator (một token / Jira project, trong bộ nhớ, sinh mỗi lần khởi động) và bootstrap của runner.
+ * Token orchestrator chỉ có quyền trên ticket của project mình (mục 7.6).
+ */
 export class BusTokens {
-  private readonly orchestratorToken = randomToken();
+  private readonly orchestratorTokens = new Map<string, string>();
 
   constructor(private readonly runnerBootstrapToken: string) {}
 
-  /** Đưa vào cấu hình MCP của session orchestrator (P10). */
-  getOrchestratorToken(): string {
-    return this.orchestratorToken;
+  /** Đưa vào cấu hình MCP của session orchestrator của `project` (P10). Sinh khi được hỏi lần đầu. */
+  getOrchestratorToken(project: string): string {
+    // Callers outside the type checker (vitest e2e, JS) must not get a token scoped to "undefined".
+    if (typeof project !== "string" || project === "") {
+      throw new Error("getOrchestratorToken(project): a Jira project key is required (one token per project)");
+    }
+    let token = this.orchestratorTokens.get(project);
+    if (token === undefined) {
+      token = randomToken();
+      this.orchestratorTokens.set(project, token);
+    }
+    return token;
   }
 
-  isOrchestratorToken(token: string): boolean {
-    return safeEqual(token, this.orchestratorToken);
+  /** Project mà token orchestrator thuộc về; null nếu không phải token orchestrator. */
+  orchestratorProject(token: string): string | null {
+    let match: string | null = null;
+    // Không dừng sớm: thời gian so sánh không phụ thuộc vị trí của project trong map.
+    for (const [project, expected] of this.orchestratorTokens) {
+      if (safeEqual(token, expected)) match = project;
+    }
+    return match;
   }
 
   isRunnerBootstrapToken(token: string): boolean {

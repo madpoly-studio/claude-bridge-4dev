@@ -113,6 +113,7 @@ export function PlannerColumn() {
         <ChatStream
           records={stream.records}
           loaded={stream.loaded}
+          truncated={stream.truncated}
           speaker="planner"
           options={STREAM_OPTIONS}
           emptyText="Phiên chưa có tin nhắn. Mô tả vấn đề để bắt đầu."

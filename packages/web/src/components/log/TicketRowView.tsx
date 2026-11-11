@@ -1,6 +1,7 @@
 import { memo } from "react";
 import { cx } from "../../lib/cx";
 import { mrLabel } from "../../lib/format";
+import { ExternalLink } from "../common/ExternalLink";
 import type { TicketRow } from "../../state/selectors";
 import ui from "../common/ui.module.css";
 import styles from "./log.module.css";
@@ -18,12 +19,10 @@ const HIDDEN_LABELS = new Set(["agent"]);
 export const TicketRowView = memo(function TicketRowView({ row, group, onOpenTask }: TicketRowViewProps) {
   const failed = group === "failed";
   const extraLabels = row.labels.filter((l) => !HIDDEN_LABELS.has(l));
-  const key = row.url ? (
-    <a href={row.url} target="_blank" rel="noreferrer" className={cx(styles.ticketKey, failed && styles.ticketKeyWarn)}>
+  const key = (
+    <ExternalLink href={row.url} className={cx(styles.ticketKey, failed && styles.ticketKeyWarn)}>
       {row.key}
-    </a>
-  ) : (
-    <span className={cx(styles.ticketKey, failed && styles.ticketKeyWarn)}>{row.key}</span>
+    </ExternalLink>
   );
 
   return (
@@ -51,9 +50,13 @@ export const TicketRowView = memo(function TicketRowView({ row, group, onOpenTas
 
       {group === "review" &&
         (row.task?.mr_url ? (
-          <a href={row.task.mr_url} target="_blank" rel="noreferrer" className={cx(ui.mono, styles.meta)}>
+          <ExternalLink
+            href={row.task.mr_url}
+            className={cx(ui.mono, styles.meta)}
+            fallback={<span className={styles.metaMono}>{row.task.mr_url}</span>}
+          >
             {mrLabel(row.task.mr_url)}
-          </a>
+          </ExternalLink>
         ) : (
           <span className={styles.metaMono}>MR: chưa có</span>
         ))}

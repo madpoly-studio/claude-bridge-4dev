@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { BUS_MCP_SERVER_NAME, DEFAULTS } from "@claude-bridge/protocol";
 import { z } from "zod";
+import { canonicalPath, isPathInside } from "./util/paths.js";
 
 /** Host luôn là loopback (mục 12). Không cấu hình được. */
 export const BIND_HOST = "127.0.0.1";
@@ -60,7 +61,18 @@ const roleFields = {
   setting_sources: settingSourcesSchema,
 };
 
-const plannerSchema = z.object(roleFields).strict();
+/**
+ * Planner chạy trong repo do worker ghi: settings `project` / `local` của repo (.claude/settings*.json) có thể cài hook,
+ * env (ANTHROPIC_BASE_URL, ...) hay apiKeyHelper, nên không được nạp. Nội dung CLAUDE.md đưa qua system_prompt_append.
+ */
+const plannerSchema = z
+  .object({
+    ...roleFields,
+    setting_sources: settingSourcesSchema.refine((sources) => sources.every((s) => s === "user"), {
+      message: 'planner may only load "user" settings: "project" and "local" come from the repo, which workers write',
+    }),
+  })
+  .strict();
 
 const orchestratorSchema = z
   .object({
@@ -191,12 +203,23 @@ export function parseConfig(raw: unknown, baseDir: string, configPath: string | 
     }
   }
   const abs = (p: string): string => (isAbsolute(p) ? p : resolve(baseDir, p));
+  const jiraEnvFile = cfg.jira_env_file === null ? null : abs(cfg.jira_env_file);
+  if (jiraEnvFile !== null) {
+    // Planner đọc được mọi file trong repo: file chứa Jira PAT phải nằm ngoài mọi repo trong whitelist.
+    const envPath = canonicalPath(jiraEnvFile);
+    const repo = cfg.repos.find((r) => isPathInside(canonicalPath(abs(r.path)), envPath));
+    if (repo) {
+      throw new ConfigError(
+        `invalid bridge config${configPath ? ` (${configPath})` : ""}: jira_env_file must not be inside repo "${repo.name}" (${repo.path})`,
+      );
+    }
+  }
   const orchestrators: Record<string, OrchestratorConfig> = {};
   for (const [key, orch] of Object.entries(cfg.orchestrators)) orchestrators[key] = { ...orch, cwd: abs(orch.cwd) };
   return {
     ...cfg,
     data_dir: abs(cfg.data_dir),
-    jira_env_file: cfg.jira_env_file === null ? null : abs(cfg.jira_env_file),
+    jira_env_file: jiraEnvFile,
     orchestrators,
     config_path: configPath,
   };

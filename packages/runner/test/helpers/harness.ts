@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseConfig, type RunnerConfig } from "../../src/config.js";
 import { createLogger, type Logger } from "../../src/logger.js";
+import type { KillTreeFn } from "../../src/processTree.js";
 import { runSlots } from "../../src/runner.js";
 import type { RunnerTimings } from "../../src/timings.js";
 import { FakeBus } from "./fakeBus.js";
@@ -49,6 +50,7 @@ export interface HarnessOptions {
   gitRepo?: boolean;
   heartbeatSeconds?: number;
   configure?: (raw: Record<string, unknown>) => void;
+  killTree?: KillTreeFn;
 }
 
 export async function startHarness(options: HarnessOptions = {}): Promise<Harness> {
@@ -86,7 +88,12 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
   const logLines: string[] = [];
   const logger: Logger = createLogger({ level: "debug", sink: (_level, line) => logLines.push(line) });
   const controller = new AbortController();
-  const done = runSlots(config, { signal: controller.signal, logger, timings: { ...FAST_TIMINGS, ...options.timings } });
+  const done = runSlots(config, {
+    signal: controller.signal,
+    logger,
+    timings: { ...FAST_TIMINGS, ...options.timings },
+    killTree: options.killTree,
+  });
 
   return {
     bus,

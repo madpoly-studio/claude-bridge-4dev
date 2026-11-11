@@ -37,6 +37,8 @@ export interface PolicyHookOptions {
   gated?: (toolName: string) => boolean;
   /** Tool luôn bị từ chối, kể cả khi khớp allowlist. */
   forbidden?: (toolName: string) => boolean;
+  /** Kiểm input của tool được phép (ví dụ đường dẫn của planner); trả lý do từ chối hoặc null. */
+  inspect?: (toolName: string, input: unknown) => string | null;
 }
 
 export function policyDenyMessage(toolName: string): string {
@@ -44,7 +46,7 @@ export function policyDenyMessage(toolName: string): string {
 }
 
 /**
- * PreToolUse hook: `deny` cho tool ngoài allowlist, `ask` cho tool có gate, còn lại để luồng permission bình thường
+ * PreToolUse hook: `deny` cho tool ngoài allowlist hoặc input bị `inspect` từ chối, `ask` cho tool có gate, còn lại để luồng permission bình thường
  * quyết định (không bao giờ trả `allow`, để canUseTool vẫn được gọi). `onFailure: "block"`: hook lỗi thì tool bị chặn.
  */
 export function policyHook(opts: PolicyHookOptions): HookCallbackMatcher {
@@ -61,6 +63,12 @@ export function policyHook(opts: PolicyHookOptions): HookCallbackMatcher {
               permissionDecision: "deny",
               permissionDecisionReason: policyDenyMessage(name),
             },
+          };
+        }
+        const rejected = opts.inspect?.(name, input.tool_input) ?? null;
+        if (rejected !== null) {
+          return {
+            hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: rejected },
           };
         }
         if (opts.gated?.(name) === true) {

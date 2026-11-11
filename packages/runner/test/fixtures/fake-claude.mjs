@@ -12,7 +12,8 @@
 //   FAKE_CLAUDE_EXTRA_LINES  number of extra assistant lines to print (default 0)
 //   FAKE_CLAUDE_NO_INIT      "1" = never print the system/init line
 //   FAKE_CLAUDE_DELAY_MS     delay between lines (default 0)
-//   FAKE_CLAUDE_GRANDCHILD   "1" = spawn a long-lived grandchild (process tree kill tests)
+//   FAKE_CLAUDE_GRANDCHILD   "1" = spawn a long-lived grandchild that inherits stdout and outlives this process
+//                            (process tree kill / leftover reaping tests)
 //   FAKE_CLAUDE_RECORD_FILE  write {argv, prompt, mcp_config_path, mcp_config_existed, pid, grandchild_pid} here
 //   FAKE_CLAUDE_EXIT_CODE    exit code for mode crash (default 3)
 import { spawn } from "node:child_process";
@@ -132,7 +133,14 @@ async function main() {
 
   let grandchildPid = null;
   if (env.FAKE_CLAUDE_GRANDCHILD === "1") {
-    const grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    // Like a dev server started from claude's Bash tool: it holds claude's stdout open and outlives claude.
+    // win32: detached keeps it out of the kill-on-close job object Node puts its children in (the real claude
+    // does not kill its children on exit). Not on POSIX, where detached would also leave the process group.
+    const grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: ["ignore", "inherit", "ignore"],
+      detached: process.platform === "win32",
+    });
+    grandchild.unref();
     grandchildPid = grandchild.pid ?? null;
   }
   if (env.FAKE_CLAUDE_RECORD_FILE) {

@@ -127,6 +127,78 @@ describe("BridgeClient", () => {
     expect([0, 1, 2, 3, 4, 5].map((n) => backoffDelay(n, BACKOFF))).toEqual([100, 200, 400, 800, 1000, 1000]);
   });
 
+  it("subscribe bị lỗi: đóng transport và kết nối lại thay vì kẹt ở syncing", async () => {
+    const { fake, client, phase } = setup();
+    client.start();
+    const c1 = fake.connections[0]!;
+    authOk(c1);
+    expect(phase()).toBe("syncing");
+    c1.push({ id: c1.lastOfType("subscribe")!.id, type: "error", payload: { code: "INTERNAL", message: "boom" } });
+    await flush();
+    expect(c1.closed).toBe(true);
+    expect(phase()).toBe("reconnecting");
+    await vi.advanceTimersByTimeAsync(BACKOFF.initialMs);
+    expect(fake.connections).toHaveLength(2);
+    // Callback trễ của transport cũ bị bỏ qua.
+    c1.handlers.onClose(1006, "");
+    await vi.advanceTimersByTimeAsync(BACKOFF.maxMs);
+    expect(fake.connections).toHaveLength(2);
+  });
+
+  it("subscribe hết hạn: kết nối lại", async () => {
+    const { fake, client, phase } = setup();
+    client.start();
+    authOk(fake.connections[0]!);
+    await vi.advanceTimersByTimeAsync(TIMEOUT + 1);
+    expect(fake.connections[0]!.closed).toBe(true);
+    expect(phase()).toBe("reconnecting");
+  });
+
+  it("subscribe được ack: không kết nối lại; rớt mạng khi subscribe đang chờ chỉ lên lịch reconnect một lần", async () => {
+    const a = setup();
+    a.client.start();
+    const conn = a.fake.connections[0]!;
+    authOk(conn);
+    conn.push({ id: conn.lastOfType("subscribe")!.id, type: "ack", payload: { result: { last_seq: 0 } } });
+    conn.push({ id: "n", type: "replay.done", payload: { last_seq: 0 } });
+    await vi.advanceTimersByTimeAsync(TIMEOUT * 3);
+    expect(a.phase()).toBe("live");
+    expect(a.fake.connections).toHaveLength(1);
+
+    const b = setup();
+    b.client.start();
+    authOk(b.fake.connections[0]!);
+    b.fake.connections[0]!.drop(1006);
+    await flush();
+    expect(b.states.filter((st) => st.phase === "reconnecting")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(BACKOFF.initialMs);
+    expect(b.fake.connections).toHaveLength(2);
+  });
+
+  it("Thử ngay khi đang kết nối: đóng transport cũ, bỏ qua callback trễ của nó", () => {
+    const { fake, client, phase } = setup();
+    client.start();
+    fake.connections[0]!.drop(1006);
+    vi.advanceTimersByTime(BACKOFF.initialMs);
+    const c1 = fake.connections[1]!;
+    expect(phase()).toBe("reconnecting");
+
+    client.retryNow();
+    expect(fake.connections).toHaveLength(3);
+    expect(c1.closed).toBe(true);
+    const c2 = fake.connections[2]!;
+
+    // Kết nối cũ mở/đóng muộn: không gửi auth, không lên lịch reconnect.
+    c1.handlers.onOpen();
+    c1.handlers.onClose(1006, "late");
+    expect(c1.sent).toHaveLength(0);
+    vi.advanceTimersByTime(BACKOFF.maxMs);
+    expect(fake.connections).toHaveLength(3);
+
+    authOk(c2);
+    expect(phase()).toBe("syncing");
+  });
+
   it("bỏ qua message không phải JSON", () => {
     const { fake, client, messages } = setup();
     client.start();

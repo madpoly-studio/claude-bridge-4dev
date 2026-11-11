@@ -32,7 +32,7 @@ export interface AgentModuleDeps {
   timers: Timers;
   driver: ClaudeDriver;
   mcpUrl: () => string;
-  orchestratorToken: () => string;
+  orchestratorToken: (projectKey: string) => string;
   log: Logger;
   restartPolicy?: RestartPolicy;
 }

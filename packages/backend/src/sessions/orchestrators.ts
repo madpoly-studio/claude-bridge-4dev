@@ -112,8 +112,8 @@ export class OrchestratorManager {
       this.setHealth(entry, "dead");
       return null;
     }
-    const session = this.sessionFor(project) ?? this.deps.sessions.createOrchestrator(project);
     try {
+      const session = this.sessionFor(project) ?? this.deps.sessions.createOrchestrator(project);
       this.deps.sessions.ensureLive(session.session_id);
     } catch (err) {
       this.deps.log.error({ err, project }, "cannot start orchestrator");
@@ -195,8 +195,15 @@ export class OrchestratorManager {
     entry.restartTimer = this.deps.timers.setTimeout(() => {
       entry.restartTimer = null;
       if (this.stopped || entry.health !== "restarting") return;
-      // start() đổi health qua onLive; đọc lại thay vì dùng giá trị đã thu hẹp kiểu.
-      if (this.start(entry.project) && this.health(entry.project) === "alive") this.restarted.emit(entry.project);
+      // Callback của timer: lỗi lọt ra đây là uncaught exception của cả process.
+      try {
+        // start() đổi health qua onLive; đọc lại thay vì dùng giá trị đã thu hẹp kiểu.
+        if (this.start(entry.project) && this.health(entry.project) === "alive") this.restarted.emit(entry.project);
+      } catch (err) {
+        this.deps.log.error({ err, project: entry.project }, "orchestrator restart failed");
+        // Tính là một lần lỗi liên tiếp: thử lại theo backoff, quá trần thì `dead`.
+        if (entry.health === "restarting" && entry.restartTimer === null) this.scheduleRestart(entry);
+      }
     }, delay);
   }
 

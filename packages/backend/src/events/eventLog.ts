@@ -47,6 +47,13 @@ interface SessionEventRow {
   event: string;
 }
 
+export interface SessionHistory {
+  /** Tăng dần theo id. */
+  events: SessionEventRecord[];
+  /** true khi có event cũ hơn (id > since) bị bỏ vì vượt giới hạn. */
+  truncated: boolean;
+}
+
 const DEFAULT_SESSION_HISTORY_LIMIT = 5000;
 
 export class EventLog {
@@ -141,7 +148,24 @@ export class EventLog {
     return records;
   }
 
-  /** Đọc theo session_id hoặc task_id (ít nhất một), id > since, tăng dần. */
+  /**
+   * Lịch sử cho `session.open` / `task.open`: N event MỚI NHẤT có id > since, trả theo thứ tự tăng dần.
+   * `truncated` = còn event cũ hơn (id > since) không được gửi, để UI báo khoảng trống thay vì im lặng.
+   */
+  readSessionHistory(query: SessionEventQuery): SessionHistory {
+    const since = query.since ?? 0;
+    const limit = query.limit ?? DEFAULT_SESSION_HISTORY_LIMIT;
+    const [column, key] = historyKey(query);
+    // Lấy dư một dòng để biết còn event cũ hơn hay không.
+    const rows = this.db
+      .prepare(`SELECT * FROM session_events WHERE ${column} = ? AND id > ? ORDER BY id DESC LIMIT ?`)
+      .all(key, since, limit + 1) as SessionEventRow[];
+    const truncated = rows.length > limit;
+    const events = rows.slice(0, limit).reverse().map(toSessionEventRecord);
+    return { events, truncated };
+  }
+
+  /** Đọc theo session_id hoặc task_id (ít nhất một), id > since, tăng dần (từ event cũ nhất). */
   readSessionEvents(query: SessionEventQuery): SessionEventRecord[] {
     const since = query.since ?? 0;
     const limit = query.limit ?? DEFAULT_SESSION_HISTORY_LIMIT;
@@ -159,6 +183,13 @@ export class EventLog {
     }
     return rows.map(toSessionEventRecord);
   }
+}
+
+/** Cột lọc của truy vấn lịch sử; task_id ưu tiên như `readSessionEvents`. Tên cột cố định, không lấy từ input. */
+function historyKey(query: SessionEventQuery): ["task_id" | "session_id", string] {
+  if (query.task_id !== undefined) return ["task_id", query.task_id];
+  if (query.session_id !== undefined) return ["session_id", query.session_id];
+  throw new Error("readSessionHistory requires session_id or task_id");
 }
 
 function toBusEvent(row: BusEventRow): BusEvent {

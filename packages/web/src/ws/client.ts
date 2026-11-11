@@ -158,7 +158,22 @@ export class BridgeClient {
   }
 
   private open(): void {
+    // Bỏ transport cũ (vd. bấm "Thử ngay" khi lần kết nối trước còn đang mở): tăng generation
+    // để callback trễ của nó bị bỏ qua, rồi đóng để không rò WebSocket.
+    const prev = this.transport;
+    this.transport = null;
+    this.authId = null;
+    if (this.authTimer) clearTimeout(this.authTimer);
+    this.authTimer = null;
     const gen = ++this.generation;
+    if (prev) {
+      this.rejectAll("DISCONNECTED", "Kết nối được thay thế");
+      try {
+        prev.close(NORMAL_CLOSE, "superseded");
+      } catch {
+        // ignore
+      }
+    }
     const guard =
       <A extends unknown[]>(fn: (...args: A) => void) =>
       (...args: A) => {
@@ -182,15 +197,8 @@ export class BridgeClient {
     const id = newId();
     this.authId = id;
     this.authTimer = setTimeout(() => {
-      // Không nhận được auth.ok: bỏ transport hiện tại (tăng generation để bỏ qua onClose của nó) rồi thử lại.
-      const stale = this.transport;
-      this.generation++;
-      try {
-        stale?.close(NORMAL_CLOSE, "auth timeout");
-      } catch {
-        // ignore
-      }
-      this.handleClose(WS_CLOSE.AUTH_TIMEOUT, "Hết thời gian xác thực");
+      // Không nhận được auth.ok: bỏ transport hiện tại rồi thử lại.
+      this.abandonTransport(WS_CLOSE.AUTH_TIMEOUT, "Hết thời gian xác thực");
     }, this.opts.requestTimeoutMs);
     try {
       this.transport?.send(JSON.stringify({ id, type: "auth", payload: { token: this.opts.token } }));
@@ -233,8 +241,15 @@ export class BridgeClient {
       this.setState({ phase: "syncing", error: null, attempt: 0, retryAt: null });
       this.opts.onMessage(msg);
       const since = this.opts.getSinceSeq();
-      // Phản hồi của subscribe là snapshot + replay; ack (nếu có) không cần dùng.
-      this.sendRequest("subscribe", since === undefined ? {} : { since_seq: since }).catch(() => undefined);
+      // Phản hồi của subscribe là snapshot + replay; ack không cần dùng. Lỗi/hết hạn thì kết nối
+      // này vô dụng (kẹt ở "syncing"): bỏ nó và đi đường reconnect bình thường.
+      const gen = this.generation;
+      const transport = this.transport;
+      this.sendRequest("subscribe", since === undefined ? {} : { since_seq: since }).catch(() => {
+        // Đã rớt/đổi kết nối (handleClose, stop, open mới) thì không làm gì thêm.
+        if (this.stopped || gen !== this.generation || !transport || this.transport !== transport) return;
+        this.abandonTransport(ABNORMAL_CLOSE, "subscribe failed");
+      });
       return;
     }
 
@@ -245,6 +260,19 @@ export class BridgeClient {
     }
 
     this.opts.onMessage(msg);
+  }
+
+  /** Đóng transport hiện tại, bỏ qua callback trễ của nó (tăng generation), rồi xử lý như mất kết nối. */
+  private abandonTransport(code: number, reason: string): void {
+    const stale = this.transport;
+    this.generation++;
+    this.transport = null;
+    try {
+      stale?.close(NORMAL_CLOSE, reason);
+    } catch {
+      // ignore
+    }
+    this.handleClose(code, reason);
   }
 
   private failAuth(message: string): void {

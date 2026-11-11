@@ -1,8 +1,10 @@
 // One worker slot (design §6): register → long-poll next → run task → repeat, with a heartbeat throughout.
 import type { RegisterRunnerResponse } from "@claude-bridge/protocol";
 import { BusClient } from "./busClient.js";
+import type { ClaudeProcess } from "./claudeProcess.js";
 import { readBootstrapToken, type RunnerConfig, type SlotConfig } from "./config.js";
 import { errorMessage, type Logger } from "./logger.js";
+import type { KillTreeFn } from "./processTree.js";
 import { AbortedError, Backoff, sleep } from "./retry.js";
 import { TaskRun } from "./taskRun.js";
 import type { RunnerTimings } from "./timings.js";
@@ -17,6 +19,8 @@ export interface SlotRunnerOptions {
   /** Aborting starts graceful shutdown: the running task is killed and reported, then run() resolves. */
   signal: AbortSignal;
   logger: Logger;
+  /** Defaults to killProcessTree; tests inject a failing one. */
+  killTree?: KillTreeFn;
 }
 
 export class SlotRunner {
@@ -107,14 +111,46 @@ export class SlotRunner {
         timings,
         shutdownSignal: signal,
         logger: taskLogger,
+        killTree: this.options.killTree,
       });
       this.currentRun = run;
+      let outcome;
       try {
-        await run.execute();
+        outcome = await run.execute();
       } finally {
         this.currentRun = null;
       }
+      if (outcome.stuckProcess) {
+        await this.quarantine(outcome.stuckProcess, taskLogger);
+      }
     }
+  }
+
+  /**
+   * A killed claude that would not die still owns the worktree: take no new task until it is gone. The
+   * heartbeat keeps running (current_task_id null, the task was already reported) so the bus does not
+   * mark the worker lost; the kill is retried on every poll. Returns early on shutdown.
+   */
+  private async quarantine(proc: ClaudeProcess, logger: Logger): Promise<void> {
+    const { signal, timings } = this.options;
+    logger.error("slot quarantined: claude did not terminate after kill; not taking tasks until it is gone", { pid: proc.pid });
+    while (!proc.hasExited) {
+      try {
+        await sleep(timings.quarantinePollMs, signal);
+      } catch (err) {
+        if (err instanceof AbortedError) {
+          logger.error("shutting down while a stuck claude process is still running", { pid: proc.pid });
+          return;
+        }
+        throw err;
+      }
+      if (!proc.hasExited) {
+        logger.error("slot quarantined: claude still running, retrying kill", { pid: proc.pid });
+        await proc.kill();
+      }
+    }
+    await proc.exited;
+    logger.warn("stuck claude process is gone, slot takes tasks again", { pid: proc.pid });
   }
 
   private onRegistered(response: RegisterRunnerResponse): void {

@@ -1,6 +1,7 @@
 // Hosts one independent SlotRunner per configured slot in this process.
 import type { RunnerConfig } from "./config.js";
 import { errorMessage, type Logger } from "./logger.js";
+import type { KillTreeFn } from "./processTree.js";
 import { SlotRunner } from "./slotRunner.js";
 import { DEFAULT_TIMINGS, type RunnerTimings } from "./timings.js";
 
@@ -10,6 +11,8 @@ export interface StartRunnerOptions {
   signal: AbortSignal;
   logger: Logger;
   timings?: Partial<RunnerTimings>;
+  /** Defaults to killProcessTree; tests inject a failing one. */
+  killTree?: KillTreeFn;
 }
 
 export class UnknownWorkerError extends Error {}
@@ -26,7 +29,7 @@ export async function runSlots(config: RunnerConfig, options: StartRunnerOptions
 
   await Promise.all(
     slots.map(async (slot) => {
-      const runner = new SlotRunner({ config, slot, timings, signal: options.signal, logger: options.logger });
+      const runner = new SlotRunner({ config, slot, timings, signal: options.signal, logger: options.logger, killTree: options.killTree });
       try {
         await runner.run();
       } catch (err) {

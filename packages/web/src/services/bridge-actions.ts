@@ -8,12 +8,17 @@ export interface PermissionResponse {
   reason?: string;
 }
 
+export interface ConnectOptions {
+  /** true: nhớ token trong localStorage; false: chỉ sessionStorage; bỏ trống: giữ nơi đang lưu. */
+  remember?: boolean;
+}
+
 /**
  * Mọi thao tác UI gửi tới backend. Hai bản cài đặt: live (WebSocket) và demo (chỉ đổi state cục bộ).
  * Các hàm trả `true` khi thành công; lỗi được đẩy thành notice, không ném ra ngoài.
  */
 export interface BridgeActions {
-  connect(url: string, token: string): void;
+  connect(url: string, token: string, options?: ConnectOptions): void;
   disconnect(): void;
   retryNow(): void;
   selectProject(projectKey: string): Promise<boolean>;

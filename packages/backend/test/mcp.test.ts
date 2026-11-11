@@ -28,7 +28,7 @@ describe("bus MCP endpoint (7.4, 7.6)", () => {
   beforeAll(async () => {
     ctx = await startBridge({ listen: true, config: { max_concurrency: 3 } });
     await registerRunners(ctx.bridge, "w-1", "w-2");
-    orchestrator = await connect(ctx.bridge.mcpUrl(), ctx.bridge.tokens.getOrchestratorToken());
+    orchestrator = await connect(ctx.bridge.mcpUrl(), ctx.bridge.tokens.getOrchestratorToken("SH"));
   });
   afterAll(async () => {
     await orchestrator.close();
@@ -132,7 +132,7 @@ describe("bus MCP endpoint (7.4, 7.6)", () => {
       headers: {
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
-        authorization: `Bearer ${ctx.bridge.tokens.getOrchestratorToken()}`,
+        authorization: `Bearer ${ctx.bridge.tokens.getOrchestratorToken("SH")}`,
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "list_workers", arguments: {} } }),
     });

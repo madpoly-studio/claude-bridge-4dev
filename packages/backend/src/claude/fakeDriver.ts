@@ -107,11 +107,12 @@ export class FakeClaudeSession implements ClaudeSessionHandle {
     return this.processing;
   }
 
-  send(text: string): void {
-    if (this.closed) return;
+  send(text: string): boolean {
+    if (this.closed) return false;
     this.sent.push(text);
     this.inbox.push(text);
     if (!this.processing) void this.processInbox();
+    return true;
   }
 
   async interrupt(): Promise<void> {

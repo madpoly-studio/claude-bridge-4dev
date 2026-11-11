@@ -24,7 +24,7 @@ Ghi lại các lựa chọn cho mục [ĐỀ XUẤT] / [MỞ] trong system desig
 | P7 | Worktree bẩn | Runner báo `exited{reason: "conflict"}` không spawn; bus ghi `failed(conflict)` | Mục 6 bước 3 |
 | P8 | WS protocol | Bản nháp mục 9, thêm `project.select`, `session.close`, `tickets.refresh`, `auth.ok`, `replay.done`, `session.history`, `*.updated`, `permission.resolved` | Bổ sung, không đổi message có sẵn |
 | P9 | Runner token | Runner gọi `/runners/register` bằng `RUNNER_BOOTSTRAP_TOKEN` (cấu hình chung backend + runner), nhận runner token riêng | Mục 7.6 |
-| P10 | Orchestrator token | Backend tự sinh token role orchestrator khi khởi động và đưa vào cấu hình MCP của session orchestrator | Mục 7.6 |
+| P10 | Orchestrator token | Backend tự sinh token role orchestrator khi khởi động, **một token cho mỗi project** (chỉ thao tác ticket `<PROJECT>-*`), và đưa vào cấu hình MCP của session orchestrator qua file tạm riêng (`--mcp-config <path>`), không qua argv | Mục 7.6, 12 |
 
 ## Vẫn [MỞ], dùng giá trị cấu hình được
 

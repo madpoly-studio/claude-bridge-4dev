@@ -3,6 +3,7 @@ import { STORAGE_KEYS, DEFAULT_WS_URL } from "../config";
 import { useBridgeActions, useBridgeState, useIsDemo } from "../hooks/bridge-context";
 import { useLocalNetworkAccess } from "../hooks/useLocalNetworkAccess";
 import { readStorage } from "../lib/storage";
+import { loadToken } from "../lib/token-storage";
 import type { ConnectionPhase } from "../ws/client";
 import { NoticeArea } from "./common/NoticeArea";
 import { ConnectScreen } from "./connect/ConnectScreen";
@@ -24,7 +25,7 @@ export function AppShell() {
     autoTried.current = true;
     // Không tự mở kết nối khi quyền đang "prompt" (mục 4.1): chờ người dùng bấm Kết nối.
     if (lna === "prompt" || lna === "denied") return;
-    const token = readStorage(STORAGE_KEYS.token);
+    const { token } = loadToken();
     if (!token) return;
     actions.connect(readStorage(STORAGE_KEYS.wsUrl) ?? DEFAULT_WS_URL, token);
   }, [demo, checked, lna, actions]);

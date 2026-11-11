@@ -6,6 +6,7 @@ import type { LnaState } from "../../hooks/useLocalNetworkAccess";
 import { useNow } from "../../hooks/useNow";
 import { cx } from "../../lib/cx";
 import { readStorage } from "../../lib/storage";
+import { forgetRememberedToken, loadToken } from "../../lib/token-storage";
 import { requestNotificationPermission } from "../../services/notifier";
 import ui from "../common/ui.module.css";
 import styles from "./connect.module.css";
@@ -41,7 +42,9 @@ export function ConnectScreen({ lna, lnaChecked }: ConnectScreenProps) {
   const actions = useBridgeActions();
   const { connection } = useBridgeState();
   const [url, setUrl] = useState(() => readStorage(STORAGE_KEYS.wsUrl) ?? DEFAULT_WS_URL);
-  const [token, setToken] = useState(() => readStorage(STORAGE_KEYS.token) ?? "");
+  const [stored] = useState(loadToken);
+  const [token, setToken] = useState(stored.token ?? "");
+  const [remember, setRemember] = useState(stored.remember);
   const [showToken, setShowToken] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const now = useNow(COUNTDOWN_TICK_MS, connection.phase === "reconnecting");
@@ -63,7 +66,7 @@ export function ConnectScreen({ lna, lnaChecked }: ConnectScreenProps) {
     setFormError(null);
     // Thao tác người dùng: tiện xin quyền thông báo luôn.
     void requestNotificationPermission();
-    actions.connect(trimmedUrl, token.trim());
+    actions.connect(trimmedUrl, token.trim(), { remember });
   };
 
   let alert: string | null = null;
@@ -125,6 +128,20 @@ export function ConnectScreen({ lna, lnaChecked }: ConnectScreenProps) {
               </button>
             </div>
           </div>
+
+          <label className={styles.remember}>
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(e) => {
+                setRemember(e.target.checked);
+                // Bỏ chọn: xóa token khỏi localStorage ngay, không chờ bấm Kết nối.
+                if (!e.target.checked) forgetRememberedToken();
+              }}
+            />
+            <span>Ghi nhớ trên máy này</span>
+            <span className={styles.rememberHint}>Không chọn: token chỉ giữ đến khi đóng tab.</span>
+          </label>
 
           {formError && (
             <p className={ui.errorText} role="alert">

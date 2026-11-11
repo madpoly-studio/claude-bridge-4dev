@@ -2,6 +2,7 @@
 // CLI entry: `runner [--config <file>] [--worker <worker_id>]`.
 import { parseArgs } from "node:util";
 import { ConfigError, DEFAULT_CONFIG_FILE, loadConfig } from "./config.js";
+import { liveResources } from "./liveResources.js";
 import { createLogger, errorMessage, parseLogLevel } from "./logger.js";
 import { UnknownWorkerError, runSlots } from "./runner.js";
 
@@ -43,7 +44,8 @@ async function main(): Promise<number> {
   const onSignal = (signal: NodeJS.Signals): void => {
     signalCount += 1;
     if (signalCount > 1) {
-      logger.warn("second signal, exiting immediately", { signal });
+      logger.warn("second signal, killing running tasks and exiting immediately", { signal });
+      liveResources.cleanupSync(logger);
       process.exit(EXIT_SIGINT);
     }
     logger.info("shutting down: stopping running tasks", { signal });
@@ -51,6 +53,8 @@ async function main(): Promise<number> {
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
+  // Last resort for any other way out (crash, stuck process at shutdown): no claude tree or token file left behind.
+  process.on("exit", () => liveResources.cleanupSync(logger));
 
   try {
     const config = await loadConfig(configPath);

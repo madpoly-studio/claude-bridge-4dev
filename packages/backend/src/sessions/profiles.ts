@@ -2,6 +2,7 @@
 import type { CanUseTool, McpServerConfig, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import { BUS_MCP_SERVER_NAME, ORCHESTRATOR_TOOLS, busToolFullName } from "@claude-bridge/protocol";
 import type { ClaudeSessionOptions } from "../claude/driver.js";
+import { RepoPathGuard, SECRET_READ_DENY_RULES } from "../claude/repoPathGuard.js";
 import { ToolPolicy, policyDenyMessage, policyHook } from "../claude/toolPolicy.js";
 import type { BridgeConfig, McpServerConfigInput, OrchestratorConfig } from "../config.js";
 import type { PermissionBroker } from "../permissions/permissionBroker.js";
@@ -32,7 +33,8 @@ export interface ProfileDeps {
   config: BridgeConfig;
   broker: PermissionBroker;
   mcpUrl: () => string;
-  orchestratorToken: () => string;
+  /** Bearer token của bus cho orchestrator của một project. */
+  orchestratorToken: (projectKey: string) => string;
 }
 
 export class SessionProfiles {
@@ -64,6 +66,9 @@ export class SessionProfiles {
     const cfg = this.deps.config.planner;
     const policy = new ToolPolicy([...PLANNER_READ_TOOLS, TOOL_SEARCH, ...cfg.allowed_tools]);
     const gated = (name: string): boolean => this.isCreateTool(name);
+    // Lớp quyết định đường dẫn: hook chạy cho MỌI tool call (kể cả đọc trong cwd mà CLI tự cho phép).
+    const paths = new RepoPathGuard(cwd);
+    const readTools: ReadonlySet<string> = new Set<string>(PLANNER_READ_TOOLS);
     const canUseTool: CanUseTool = async (toolName, input, opts): Promise<PermissionResult> => {
       if (gated(toolName)) {
         return this.deps.broker.requestApproval({
@@ -75,9 +80,14 @@ export class SessionProfiles {
         });
       }
       if (!policy.allows(toolName)) return { behavior: "deny", message: policyDenyMessage(toolName) };
-      // CLI chỉ hỏi tool đọc khi đường dẫn nằm ngoài repo: planner chỉ đọc trong repo của session.
-      if (opts.blockedPath !== undefined) {
-        return { behavior: "deny", message: `Path ${opts.blockedPath} is outside this session's repository.` };
+      // CLI 2.1.322 cũng hỏi cả đọc TRONG repo (thấy thật khi cwd có tên 8.3 như `CPU124~1`) và có thể không đặt
+      // blockedPath: quyết định bằng cùng RepoPathGuard với hook, không dựa vào việc CLI có hỏi hay không.
+      if (readTools.has(toolName)) {
+        const rejected =
+          paths.check(toolName, input) ??
+          (opts.blockedPath !== undefined ? paths.check(toolName, { file_path: opts.blockedPath }) : null);
+        if (rejected !== null) return { behavior: "deny", message: rejected };
+        return { behavior: "allow", updatedInput: input };
       }
       return { behavior: "allow", updatedInput: input };
     };
@@ -87,7 +97,8 @@ export class SessionProfiles {
       mcpServers: toSdkServers(cfg.mcp_servers),
       tools: policy.builtinTools(),
       allowedTools: policy.preapprovedMcpTools(gated),
-      hooks: { PreToolUse: [policyHook({ policy, gated })] },
+      disallowedTools: [...SECRET_READ_DENY_RULES],
+      hooks: { PreToolUse: [policyHook({ policy, gated, inspect: (name, input) => paths.check(name, input) })] },
       canUseTool,
       systemPrompt: promptAppend(PLANNER_PROMPT_APPEND, cfg.system_prompt_append),
     };
@@ -110,7 +121,8 @@ export class SessionProfiles {
         [BUS_MCP_SERVER_NAME]: {
           type: "http",
           url: this.deps.mcpUrl(),
-          headers: { Authorization: `Bearer ${this.deps.orchestratorToken()}` },
+          // Token chỉ có quyền trên ticket của project này (mục 7.6). SdkClaudeDriver ghi nó vào file tạm, không vào argv.
+          headers: { Authorization: `Bearer ${this.deps.orchestratorToken(projectKey)}` },
           alwaysLoad: true,
         },
       },

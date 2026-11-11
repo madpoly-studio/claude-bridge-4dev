@@ -11,6 +11,8 @@ import styles from "./chat.module.css";
 interface ChatStreamProps {
   records: SessionEventRecord[];
   loaded: boolean;
+  /** Có event cũ hơn đã bị ẩn. */
+  truncated?: boolean;
   speaker: string;
   options: BuildOptions;
   emptyText: string;
@@ -20,14 +22,16 @@ interface ChatStreamProps {
 }
 
 const AGENT_KINDS = new Set(["agent", "tool"]);
+const TRUNCATED_TEXT = "Đã ẩn các sự kiện cũ hơn";
 
-export function ChatStream({ records, loaded, speaker, options, emptyText, ariaLabel, footer }: ChatStreamProps) {
+export function ChatStream({ records, loaded, truncated = false, speaker, options, emptyText, ariaLabel, footer }: ChatStreamProps) {
   const items = useMemo(() => buildStreamItems(records, options), [records, options]);
   const { ref, onScroll } = useAutoScroll<HTMLDivElement>(`${items.length}:${footer ? 1 : 0}`);
 
   return (
     <div ref={ref} className={columnStyles.body} onScroll={onScroll}>
       <div className={styles.stream} role="log" aria-label={ariaLabel} aria-live="polite" aria-relevant="additions">
+        {truncated && <p className={styles.truncated}>{TRUNCATED_TEXT}</p>}
         {!loaded && records.length === 0 && <p className={styles.state}>Đang tải lịch sử…</p>}
         {loaded && items.length === 0 && <p className={styles.state}>{emptyText}</p>}
         {items.map((item, i) => {

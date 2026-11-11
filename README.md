@@ -65,7 +65,7 @@ cp bridge.config.example.json bridge.config.json
 | `allowed_origins` | **Bắt buộc.** Origin của frontend (host SSO, và `http://localhost:5173` khi dev) |
 | `repos` | **Bắt buộc.** `REPO_WHITELIST`: các repo planner được mở (`name`, `path`, `project_key`). UI chỉ chọn trong danh sách này |
 | `projects` | Các Jira project key |
-| `jira_env_file` | Đường dẫn file `.env` của team (đọc `MPS_JIRA_URL`, `MPS_JIRA_PAT`, `MPS_CA_BUNDLE`) cho tab Tickets. Backend chỉ **đọc** Jira |
+| `jira_env_file` | Đường dẫn file `.env` của team (đọc `MPS_JIRA_URL`, `MPS_JIRA_PAT`, `MPS_CA_BUNDLE`) cho tab Tickets. Backend chỉ **đọc** Jira. Phải nằm **ngoài** mọi repo trong `repos` (planner đọc được repo), nếu không backend không khởi động |
 | `planner.mcp_servers`, `planner.allowed_tools` | MCP server Jira cho planner và các tool đọc được phép. Tool tạo issue khớp `jira_create_tool_pattern` luôn qua gate duyệt |
 | `orchestrators.<KEY>` | `cwd` riêng cho orchestrator của project, MCP Jira (đọc), allowlist |
 | `max_concurrency`, `task_timeout_minutes`, `orch_tick_minutes`, `jira_poll_seconds` | Giá trị mặc định theo system design mục 13 |
@@ -133,11 +133,16 @@ Không test nào gọi Claude thật hay Jira thật: dùng driver Claude giả,
 Web UI này tương đương một remote shell trên máy chứa source code và token Jira/GitLab.
 
 - Backend chỉ bind `127.0.0.1`. WebSocket kiểm tra `Origin` theo `allowed_origins` và yêu cầu pairing token ở message đầu tiên.
-- Token riêng cho từng role: runner (bootstrap → runner token), orchestrator (chỉ tool điều phối), worker (task token,
-  chỉ tác động lên task của nó). Token lưu dạng hash, không ghi vào event log.
+- Token riêng cho từng role: runner (bootstrap → runner token), orchestrator (một token / project, chỉ tool điều phối
+  trên ticket `<PROJECT>-*`), worker (task token, chỉ tác động lên task của nó). Token lưu dạng hash, không ghi vào event log.
+- Cấu hình MCP của session Claude (bearer token của bus, `env` như Jira PAT) được ghi vào file tạm riêng (mode 0600,
+  thư mục tạm riêng) và truyền bằng `--mcp-config <đường dẫn>`, không bao giờ nằm trên command line của process.
 - Planner chỉ có tool đọc, chặn ba lớp (`tools`, hook `PreToolUse`, `canUseTool`). Tool ghi duy nhất là tạo issue, luôn qua gate duyệt.
+  Mọi đường dẫn planner đọc phải resolve (realpath) vào trong repo của session; file trông như secret (`.env*`, `*.pem`,
+  `*.key`, `id_rsa*`, `.npmrc`, `.netrc`, `credentials*`) luôn bị từ chối.
 - `cwd` của session chỉ lấy từ `repos`. Session không nạp settings của người dùng (`setting_sources: []` mặc định),
-  để allow rule cá nhân không nới quyền planner.
+  để allow rule cá nhân không nới quyền planner. Planner không được nạp `project` / `local` (repo do worker ghi, settings
+  của repo có thể cài hook / env); muốn đưa nội dung `CLAUDE.md` cho planner thì dùng `planner.system_prompt_append`.
 
 ## Trạng thái
 

@@ -90,13 +90,7 @@ export class WakeDispatcher {
     if (p.keys.has(key)) return;
     p.keys.add(key);
     p.events.push(event);
-    if (p.window === null && p.events.length === 1) {
-      const entry = p;
-      entry.window = this.deps.timers.setTimeout(() => {
-        entry.window = null;
-        this.tryFlush(project);
-      }, this.deps.debounceMs);
-    }
+    if (p.window === null && p.events.length === 1) this.openWindow(project, p);
   }
 
   private drop(project: string): void {
@@ -152,8 +146,19 @@ export class WakeDispatcher {
       this.deps.target.sendSystemTurn(project, formatWakeTurn(events));
       this.deps.log.info({ project, count: events.length }, "orchestrator woken");
     } catch (err) {
-      this.deps.log.error({ err, project }, "failed to send wake turn; events kept for the next idle");
-      this.pending.set(project, { events, keys: new Set(events.map((e) => JSON.stringify(e))), window: null });
+      this.deps.log.error({ err, project }, "failed to send wake turn; events kept, retrying after the debounce window");
+      // Events mới tới sau đó không mở cửa sổ (chỉ event đầu tiên mở) và có thể không còn onIdle nào nữa:
+      // tự hẹn lần thử lại để event không kẹt. Orchestrator dead / dừng thì drop() hủy timer này.
+      const retry: Pending = { events, keys: new Set(events.map((e) => JSON.stringify(e))), window: null };
+      this.pending.set(project, retry);
+      this.openWindow(project, retry);
     }
+  }
+
+  private openWindow(project: string, p: Pending): void {
+    p.window = this.deps.timers.setTimeout(() => {
+      p.window = null;
+      this.tryFlush(project);
+    }, this.deps.debounceMs);
   }
 }

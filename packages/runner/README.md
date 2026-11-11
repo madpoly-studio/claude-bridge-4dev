@@ -62,8 +62,16 @@ Validate bằng zod khi khởi động; sai cấu hình thì in lỗi và thoát
    - Mọi dòng stdout được chuyển tới `POST /tasks/{id}/events` theo lô (500ms hoặc 50 event), đúng thứ tự, gửi sau `started`.
      Dòng không phải JSON gửi dạng `{type: "raw", text}`.
    - Vượt `timeout_seconds` → kill tree, `reason: "timeout"`.
-   - Process thoát → flush event → `POST exited {exit_code, usage, reason, message}`. `usage` = `usage` + `total_cost_usd` của dòng `result` cuối.
+   - Process thoát → kill các process con/cháu còn sót (xem "Dọn process còn sót") → flush event → `POST exited {exit_code, usage, reason, message}`.
+     `usage` = `usage` + `total_cost_usd` của dòng `result` cuối.
      Thoát mã khác 0 mà runner không kill → `reason: null`, `message` chứa ~1000 ký tự cuối của stderr (bus ghi `failed(no_terminal_report)` nếu chưa có báo cáo kết thúc).
+   - `reason: "timeout"`/`"cancelled"` chỉ khi yêu cầu kill đến **trước** khi process thoát. Cancel (heartbeat, reconcile, bus từ chối
+     `started`), timeout hay shutdown đến sau khi process đã tự thoát (lúc runner còn đang drain stdio, flush event) bị bỏ qua: run đó
+     được báo như thoát bình thường.
+   - **Kill không có tác dụng:** sau khi kill, chờ process thoát tối đa 30s. Quá hạn → `POST exited {exit_code: null, reason: <lý do kill>,
+     message: "process did not terminate after kill"}` (shutdown: `reason: null`), ngừng chuyển event của process đó, và slot vào trạng thái
+     **cách ly**: không long-poll nhận task mới, vẫn heartbeat với `current_task_id: null` (bus không coi worker là mất), log `ERROR` và thử
+     kill lại mỗi 5s cho tới khi process thật sự thoát, rồi mới nhận task tiếp.
 5. Quay lại bước 3.
 
 **Lỗi mạng:** mọi call tới bus thử lại với exponential backoff (500ms → tối đa 10s, có jitter). 5xx/429 cũng thử lại;
@@ -76,7 +84,19 @@ Bus từ chối `started` bằng 4xx (task không còn active) → runner dừng
 
 **Tắt (SIGINT/SIGTERM):** dừng long-poll, kill task đang chạy, flush event, `POST exited {reason: null, message: "runner shutdown"}`
 (bus ghi `failed(no_terminal_report)`, đúng tiêu chí Phase 2 "kill giữa chừng"), rồi thoát. Phần báo cáo cuối được thử lại tối đa 15s.
-Tín hiệu thứ hai → thoát ngay.
+Tín hiệu thứ hai → kill đồng bộ mọi cây process claude đang chạy (POSIX: `SIGKILL` vào process group; Windows: `taskkill /PID <pid> /T /F`),
+xóa mọi thư mục tạm chứa MCP config (có task token), rồi thoát ngay (không báo `exited`). Sự kiện `exit` của process cũng chạy cùng bước dọn
+đồng bộ này, để runner thoát theo đường nào (crash, shutdown khi có process kẹt) cũng không để lại claude hay file token.
+
+**Dọn process còn sót.** Claude có thể để lại process chạy tiếp sau khi nó thoát (dev server, watcher chạy từ tool Bash). Chúng giữ file
+trong worktree (Windows khóa file), làm task sau bị `conflict`. Sau mỗi lần claude thoát (kể cả thoát bình thường), trước khi drain stdio:
+
+- POSIX: claude là trưởng process group (spawn `detached`), runner gửi `SIGKILL` vào cả group (bỏ qua `ESRCH`). Process tự `setsid` thì thoát được.
+- Windows: không có process group và orphan không được gán lại cha, `taskkill /T` không tìm thấy chúng khi claude đã thoát. Trong lúc claude
+  chạy, runner chụp bảng process mỗi 2s (`powershell.exe -NoProfile` + `Get-CimInstance Win32_Process`: `ProcessId`, `ParentProcessId`,
+  `CreationDate`; khoảng 0.5s mỗi lần, không chạy chồng nhau, timeout 10s) và ghi lại các process hậu duệ. Sau khi claude thoát, chụp thêm một
+  lần, giữ những hậu duệ còn sống mà `CreationDate` vẫn khớp (tránh kill nhầm process khác dùng lại PID), rồi `taskkill /F /T /PID ...`.
+  Hậu duệ vừa sinh vừa chết giữa hai lần chụp mà con của nó vẫn sống thì có thể lọt. Lỗi chụp/kill chỉ log warning.
 
 ## Lệnh claude và các flag đã đối chiếu
 
@@ -116,7 +136,7 @@ Không có khác biệt so với P2 trong `docs/decisions.md`. Các quan sát th
 - **MCP config:** ghi vào thư mục mới `%TEMP%\claude-bridge-task-XXXX\mcp-config.json` (`mkdtemp`, mode 0600 trên POSIX; trên Windows
   `%TEMP%` nằm trong profile người dùng, ACL chỉ user đó đọc được). File chứa task token: không bao giờ được log, xóa sau khi process thoát.
 - **Kill tree:** `taskkill /pid <pid> /T /F` (mã thoát của claude khi đó thường là 1). POSIX: spawn `detached`, SIGTERM vào process group,
-  SIGKILL sau 5s nếu chưa thoát.
+  SIGKILL sau 5s nếu chưa thoát. Process còn sót sau khi claude thoát: xem "Dọn process còn sót".
 - Child không nhận `RUNNER_BOOTSTRAP_TOKEN` (bị loại khỏi env) để worker không tự register runner được.
 
 ## Bảo mật & log
@@ -136,6 +156,7 @@ pnpm --filter @claude-bridge/runner typecheck   # src + test
   không phải JSON, result kèm usage), và ở mode `complete` gọi tool `complete_task` của bus qua JSON-RPC HTTP thô, lấy URL + header
   từ file `--mcp-config` (gọi `initialize` trước, đọc được cả JSON lẫn SSE). Dùng lại được cho test end-to-end với bus thật.
   Điều khiển bằng env: `FAKE_CLAUDE_MODE=complete|hang|crash`, `FAKE_CLAUDE_TOOL=complete_task|fail_task|none`, `FAKE_CLAUDE_TOOL_ARGS`,
-  `FAKE_CLAUDE_EXTRA_LINES`, `FAKE_CLAUDE_NO_INIT`, `FAKE_CLAUDE_DELAY_MS`, `FAKE_CLAUDE_GRANDCHILD`, `FAKE_CLAUDE_RECORD_FILE`,
+  `FAKE_CLAUDE_EXTRA_LINES`, `FAKE_CLAUDE_NO_INIT`, `FAKE_CLAUDE_DELAY_MS`, `FAKE_CLAUDE_GRANDCHILD` (process cháu giữ stdout và sống lâu hơn
+  claude; trên Windows spawn `detached` vì Node tự kill con không detached khi nó thoát), `FAKE_CLAUDE_RECORD_FILE`,
   `FAKE_CLAUDE_EXIT_CODE` (xem đầu file).
 - Các test vòng lặp cần `git` (tạo repo tạm); không có git thì bị skip.

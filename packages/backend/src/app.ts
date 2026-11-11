@@ -8,6 +8,7 @@ import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastif
 import { type BusModule, createBus, registerBusRoutes } from "./bus/index.js";
 import { resolveRunnerBootstrapToken } from "./bus/tokens.js";
 import type { ClaudeDriver } from "./claude/driver.js";
+import { McpConfigFiles } from "./claude/mcpConfigFile.js";
 import { SdkClaudeDriver } from "./claude/sdkDriver.js";
 import { BIND_HOST, type BridgeConfig } from "./config.js";
 import { type Db, openDatabase } from "./db/database.js";
@@ -66,14 +67,7 @@ export async function createApp(config: BridgeConfig, opts: AppOptions = {}): Pr
   const clock = opts.clock ?? systemClock;
   // Tạo driver thật trước mọi tài nguyên: auth mode `api_key` thiếu ANTHROPIC_API_KEY làm backend dừng ngay lúc khởi động.
   // Logger của Fastify chỉ được dùng khi driver chạy, lúc đó `app` đã tồn tại.
-  const driver =
-    opts.claudeDriver ??
-    new SdkClaudeDriver({
-      authMode: config.claude_auth_mode,
-      executable: config.claude_executable,
-      clientApp: `claude-bridge/${SERVER_VERSION}`,
-      log: { warn: (obj, msg) => app.log.warn(obj, msg), debug: (obj, msg) => app.log.debug(obj, msg) },
-    });
+  const driver = opts.claudeDriver ?? createSdkDriver(config, () => app.log);
   const db = openDatabase(opts.dbPath ?? join(config.data_dir, "bridge.db"));
   const eventLog = new EventLog(db, clock);
   const runnerBootstrapToken = resolveRunnerBootstrapToken(config.runner_bootstrap_token, config.data_dir);
@@ -118,7 +112,7 @@ export async function createApp(config: BridgeConfig, opts: AppOptions = {}): Pr
     timers,
     driver,
     mcpUrl,
-    orchestratorToken: () => mod.tokens.getOrchestratorToken(),
+    orchestratorToken: (project) => mod.tokens.getOrchestratorToken(project),
     log: app.log,
     ...(opts.orchestratorRestartPolicy ? { restartPolicy: opts.orchestratorRestartPolicy } : {}),
   });
@@ -165,6 +159,21 @@ export async function createApp(config: BridgeConfig, opts: AppOptions = {}): Pr
       db.close();
     },
   };
+}
+
+function createSdkDriver(config: BridgeConfig, log: () => FastifyInstance["log"]): SdkClaudeDriver {
+  // Constructor throws ConfigError first (api_key mode without a key) so nothing is touched on a bad start.
+  const mcpConfigFiles = new McpConfigFiles(config.data_dir);
+  const driver = new SdkClaudeDriver({
+    authMode: config.claude_auth_mode,
+    executable: config.claude_executable,
+    clientApp: `claude-bridge/${SERVER_VERSION}`,
+    mcpConfigFiles,
+    log: { warn: (obj, msg) => log().warn(obj, msg), debug: (obj, msg) => log().debug(obj, msg) },
+  });
+  // MCP config files (with secrets) left behind by a previous run that was killed before its sessions ended.
+  mcpConfigFiles.removeStale();
+  return driver;
 }
 
 export { WS_PATH };

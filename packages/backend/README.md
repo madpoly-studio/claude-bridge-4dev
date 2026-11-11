@@ -44,11 +44,11 @@ Plain JSON-RPC to `/mcp` needs `Accept: application/json, text/event-stream`.
 | `planner.mcp_servers` | `{}` | MCP servers for planner sessions (Agent SDK `mcpServers` shape: stdio `{command,args,env}` or `{type:"http"/"sse",url,headers}`) |
 | `planner.allowed_tools` | `[]` | Extra allowed tools on top of `Read`, `Grep`, `Glob`, `ToolSearch`. Exact names or a trailing `*` (`mcp__jira__jira_get_*`) |
 | `planner.system_prompt_append` / `planner.model` | `null` | Appended to the built-in planner prompt / model override |
-| `planner.setting_sources` | `[]` | Claude Code settings sources to load (`user`, `project`, `local`). Empty = isolated; add `project` to load the repo's `CLAUDE.md` |
-| `orchestrators.<KEY>` | none | One orchestrator per Jira project (`KEY` must be in `projects`): `cwd` (dedicated folder, must exist), `mcp_servers`, `allowed_tools`, `system_prompt_append`, `model`, `setting_sources` |
+| `planner.setting_sources` | `[]` | Claude Code settings sources to load: only `user` is accepted. `project` / `local` are rejected because they come from the repo, which workers write (`.claude/settings.json` can set hooks, `env` such as `ANTHROPIC_BASE_URL`, `apiKeyHelper`). Put `CLAUDE.md` content into `planner.system_prompt_append` instead |
+| `orchestrators.<KEY>` | none | One orchestrator per Jira project (`KEY` must be in `projects`): `cwd` (dedicated folder, must exist), `mcp_servers`, `allowed_tools`, `system_prompt_append`, `model`, `setting_sources` (`project` is allowed here: the cwd is a dedicated config folder) |
 | `orchestrator_autostart` | `true` | Start every configured orchestrator when the backend listens; `false` = start on `project.select` or on the first message |
 | `jira_create_tool_pattern` | create_issue names | Regex of the Jira create-issue tool that goes through the approval gate |
-| `jira_env_file` | `null` | Team `.env` with `MPS_JIRA_URL`, `MPS_JIRA_PAT`, `MPS_JIRA_PROJECT_KEY`, `MPS_CA_BUNDLE` (CA path may be relative to the `.env` folder) |
+| `jira_env_file` | `null` | Team `.env` with `MPS_JIRA_URL`, `MPS_JIRA_PAT`, `MPS_JIRA_PROJECT_KEY`, `MPS_CA_BUNDLE` (CA path may be relative to the `.env` folder). Must be outside every `repos[].path` (planners can read repos); config parsing fails otherwise |
 
 Which Jira MCP server the team uses is still open (section 17.3). The example config uses
 [`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian) (`uvx mcp-atlassian`, Jira Server PAT in
@@ -65,11 +65,26 @@ Every bridge session runs with `permissionMode: "default"`, `strictMcpConfig: tr
 2. A `PreToolUse` hook (`onFailure: "block"`) denies every tool outside the allowlist. This also covers tools that an
    allow rule from a loaded settings source would pre-approve. For the create-issue tool it returns `ask`, so the call
    always reaches `canUseTool` (the approval gate) even when a rule allows it.
-3. `canUseTool` denies anything outside the allowlist, and planner reads outside the repo (`blockedPath`).
+3. `canUseTool` denies anything outside the allowlist. For planner read tools it applies the same path guard as the
+   hook (and checks `blockedPath` when the CLI sets one); CLI 2.1.322 also asks for some in-repo reads.
+
+Planner path sandbox (`src/claude/repoPathGuard.ts`, run by the hook for every call): `file_path` / `path` /
+`notebook_path` are resolved against the repo and through symlinks/junctions (`realpath`, nearest existing ancestor
+for missing paths) and must stay inside the repo's realpath (case-insensitive on Windows; `D:/repo-evil` is not inside
+`D:/repo`). `~`, `$VAR`, `%VAR%`, alternate data streams and Glob/Grep patterns that are absolute or contain `..`
+are denied. Secret-looking files (`.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*` and other SSH keys, `.npmrc`,
+`.netrc`, `.git-credentials`, `credentials*`) are denied by name, and the same patterns are passed as `Read(...)`
+rules in `disallowedTools`.
 
 Only exact MCP names from the allowlist are passed as `allowedTools`; wildcard entries go through `canUseTool`.
-The orchestrator gets `bridge-bus` (`type: "http"`, `alwaysLoad: true`, bearer = orchestrator token) plus its configured
-servers; the create-issue tool is always denied for it.
+The orchestrator gets `bridge-bus` (`type: "http"`, `alwaysLoad: true`, bearer = that project's orchestrator token)
+plus its configured servers; the create-issue tool is always denied for it.
+
+MCP server configs hold secrets (bus token, `env` such as a Jira PAT). The Agent SDK would put `mcpServers` on the CLI
+command line as `--mcp-config <json>`, readable by every local process, so `SdkClaudeDriver` writes them to
+`<os tmp>/claude-bridge-mcp-<hash of data_dir>-XXXXXX/mcp-config.json` (mkdtemp, exclusive create, mode 0600) and passes
+`extraArgs: { "mcp-config": <path> }` with `strictMcpConfig`. The file is deleted when the session's process ends;
+files left by a killed backend are removed at the next start.
 
 ### Session lifecycle and resume
 
@@ -83,8 +98,13 @@ servers; the create-issue tool is always denied for it.
 - `busy` is true from a send until the turn's `result`; every change is pushed as `session.updated` (broadcast).
 - Backend start: sessions in `starting` / `active` become `detached` (graceful shutdown does the same). The next
   `session.send` spawns the process with `resume: claude_session_id`; `session.open {session_id, since}` replays the
-  stored events (`session.history`) and subscribes to live ones in the same tick. A process that dies on its own makes
-  the session `detached` (resumable) or `error` (no init was received).
+  stored events (`session.history`: the latest 5000 events with `id > since`, ascending, with `truncated: true` and
+  `first_id` when older ones were left out) and subscribes to live ones in the same tick. `task.open` works the same.
+  A process that dies on its own makes the session `detached` (resumable) or `error` (no init was received). A
+  resumed process that fails before `init` (e.g. "No conversation found" after transcripts were cleaned up) clears
+  `claude_session_id` and records a `bridge_notice`, so the next start begins a new conversation instead of failing forever.
+- `session.send` to a session that is closing, or whose process has already exited, fails with `CONFLICT` (the
+  message is not stored and not silently dropped).
 - `session.interrupt` calls `Query.interrupt()`; `session.close` closes the query and sets `state: closed` (not allowed
   for the orchestrator, which the backend manages).
 - `project.select` sets the connection's project and `status.project_key` (single user: the last selection wins) and
@@ -141,7 +161,10 @@ with `error: "rate_limit"`), as decided for section 10.4.
   number, so "Đang chạy x/y" matches the error the orchestrator gets.
 - Task tokens and runner tokens are stored as SHA-256 hashes and survive a restart. A task token's plain text is kept in
   memory until the task ends. If the bus restarts before the runner picks the task up, `next` issues a new token.
-  The orchestrator token is generated on every start (P10).
+  Orchestrator tokens (one per project) are generated on every start (P10). An orchestrator token only acts on tickets
+  `<PROJECT>-*`: `assign_task` / `cancel_task` on another project's ticket fail with `FORBIDDEN`, `list_tasks` returns
+  only its project's tasks; `list_workers` is shared.
+- `complete_task.mr_url` must be an `http` / `https` URL (`javascript:` and others fail with `INVALID_INPUT`).
 - After a restart, the sweeper measures the heartbeat and start timeouts from the restart time at the earliest, so
   runners get one full period to re-register.
 - A worker tool call (`report_progress` / `complete_task` / `fail_task`) on an `assigned` task first moves it to
@@ -202,7 +225,7 @@ status(): BusStatus                                   // worker/task counts, act
 onTaskAssigned(cb: (task: Task) => void): Unsubscribe
 ```
 
-`bridge.tokens.getOrchestratorToken(): string` is the bearer token for the orchestrator session's bus MCP config
+`bridge.tokens.getOrchestratorToken(project: string): string` is the bearer token for that project's orchestrator bus MCP config
 (`mcpServers: { "bridge-bus": { type: "http", url: bridge.mcpUrl(), headers: { Authorization: "Bearer …" } } }`).
 
 Change listeners on `bridge.core: BusCore`. All of them fire after the SQLite transaction commits:

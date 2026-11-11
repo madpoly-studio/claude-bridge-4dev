@@ -62,9 +62,15 @@ export function registerSessionHandlers(deps: SessionWsDeps): void {
   hub.registerHandler("session.open", schemas.open, ({ client }, p) => {
     const session = sessions.require(p.session_id);
     // Đọc lịch sử và đăng ký nhận live trong cùng một tick → không lọt / trùng event.
-    const events = sessions.history(session.session_id, p.since ?? 0);
+    const { events, truncated } = sessions.history(session.session_id, p.since ?? 0);
     client.openSession(session.session_id);
-    client.send("session.history", { session_id: session.session_id, task_id: null, events });
+    client.send("session.history", {
+      session_id: session.session_id,
+      task_id: null,
+      events,
+      truncated,
+      first_id: events[0]?.id ?? null,
+    });
     return { session };
   });
 

@@ -65,6 +65,21 @@
   gap: var(--sp-3);
 }
 
+.remember {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-md);
+  cursor: pointer;
+}
+
+.rememberHint {
+  flex-basis: 100%;
+  font-size: var(--fs-sm);
+  color: var(--color-text-dim);
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;

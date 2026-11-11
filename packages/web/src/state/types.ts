@@ -18,6 +18,8 @@ export interface StreamState {
   lastId: number;
   /** Đã nhận session.history ít nhất một lần. */
   loaded: boolean;
+  /** Có event cũ hơn không được giữ (server cắt lịch sử hoặc vượt MAX_STREAM_RECORDS). */
+  truncated?: boolean;
 }
 
 export type NoticeKind = "error" | "info";
@@ -65,6 +67,8 @@ export type LocalAction =
   | { type: "local/notice"; notice: Notice }
   | { type: "local/dismiss-notice"; id: string }
   | { type: "local/permission-cleared"; requestId: string }
+  /** Bỏ luồng không còn hiển thị để giải phóng bộ nhớ. */
+  | { type: "local/drop-streams"; keys: string[] }
   | { type: "local/reset" };
 
 export type Action = ServerMessage | LocalAction;

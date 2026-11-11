@@ -1,10 +1,10 @@
 // Session Manager (mục 5.2): vòng đời session Claude do bridge spawn — tạo, resume lười theo claude_session_id,
 // ghi MỌI event vào session_events trước khi đẩy ra WS, cờ busy theo turn, interrupt, close.
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { Session, SessionEventOrigin, SessionEventRecord, SessionRole, SessionState } from "@claude-bridge/protocol";
+import type { Session, SessionEventOrigin, SessionRole, SessionState } from "@claude-bridge/protocol";
 import type { ClaudeDriver, ClaudeSessionHandle, ClaudeSessionOptions } from "../claude/driver.js";
 import type { RepoConfig } from "../config.js";
-import type { EventLog } from "../events/eventLog.js";
+import type { EventLog, SessionHistory } from "../events/eventLog.js";
 import type { Clock } from "../util/clock.js";
 import { shortId } from "../util/ids.js";
 import { ListenerSet, type Unsubscribe } from "../util/listeners.js";
@@ -48,6 +48,10 @@ interface Runtime {
   readonly role: SessionRole;
   readonly handle: ClaudeSessionHandle;
   readonly startedAt: number;
+  /** Spawn với `resume` (claude_session_id cũ). */
+  readonly resumed: boolean;
+  /** Đã nhận `system/init`: CLI đã nạp được conversation. */
+  initSeen: boolean;
   busy: boolean;
   closeRequested: boolean;
   done: Promise<void>;
@@ -135,8 +139,9 @@ export class SessionManager {
     return orchestrator ? [...sessions, orchestrator] : sessions;
   }
 
-  history(sessionId: string, since: number): SessionEventRecord[] {
-    return this.deps.eventLog.readSessionEvents({ session_id: sessionId, since });
+  /** Các event mới nhất có id > since (xem EventLog.readSessionHistory). */
+  history(sessionId: string, since: number): SessionHistory {
+    return this.deps.eventLog.readSessionHistory({ session_id: sessionId, since });
   }
 
   isLive(sessionId: string): boolean {
@@ -174,6 +179,8 @@ export class SessionManager {
       role: row.role,
       handle,
       startedAt: this.deps.clock.now(),
+      resumed: resume !== null,
+      initSeen: false,
       busy: false,
       closeRequested: false,
       done: Promise.resolve(),
@@ -187,13 +194,19 @@ export class SessionManager {
     return session;
   }
 
-  /** Ghi turn (`{type:"user_text"}`, origin user/system) rồi mới đưa cho Claude. */
+  /**
+   * Đưa turn cho Claude rồi ghi ngay `{type:"user_text"}` (origin user/system) trong cùng tick, trước mọi message trả
+   * lời (luồng message là async). Throw CONFLICT nếu session đang đóng / process đã thoát: turn không bị nuốt im lặng.
+   */
   sendText(sessionId: string, text: string, origin: Extract<SessionEventOrigin, "user" | "system">): Session {
     this.ensureLive(sessionId);
     const rt = this.runtimes.get(sessionId) as Runtime;
+    if (rt.closeRequested) throw new WsError("CONFLICT", `session ${sessionId} is closing`);
+    if (!rt.handle.send(text)) {
+      throw new WsError("CONFLICT", `session ${sessionId} cannot accept messages: the Claude process has ended`);
+    }
     this.deps.eventLog.appendSessionEvent({ session_id: sessionId, origin, event: { type: "user_text", text } });
     this.deps.store.touch(sessionId);
-    rt.handle.send(text);
     rt.busy = true;
     return this.publish(this.deps.store.require(sessionId));
   }
@@ -249,7 +262,12 @@ export class SessionManager {
     } catch (err) {
       error = err instanceof Error ? err : new Error(String(err));
     }
-    this.finish(rt, error);
+    // rt.done không được ai await đến cuối: lỗi ở đây (DB đã đóng, listener throw) không được thành unhandled rejection.
+    try {
+      this.finish(rt, error);
+    } catch (err) {
+      this.deps.log.error({ err, session_id: rt.sessionId }, "failed to finalize claude session");
+    }
   }
 
   private handleMessage(rt: Runtime, message: SDKMessage): void {
@@ -257,6 +275,7 @@ export class SessionManager {
       const { store, eventLog } = this.deps;
       let changed = false;
       if (message.type === "system" && message.subtype === "init") {
+        rt.initSeen = true;
         const row = store.require(rt.sessionId);
         if (row.claude_session_id !== message.session_id) store.setClaudeSessionId(rt.sessionId, message.session_id);
         if (row.state !== "active") store.setState(rt.sessionId, "active");
@@ -289,8 +308,20 @@ export class SessionManager {
     const row = store.get(rt.sessionId);
     if (!row) return;
     const expected = rt.closeRequested || this.shuttingDown;
+    // Resume chết trước `init` (vd. "No conversation found" vì transcript đã bị dọn): resume lại sẽ chết y hệt,
+    // nên quên claude_session_id để lần spawn sau bắt đầu conversation mới thay vì kẹt mãi.
+    const staleResume = !expected && rt.resumed && !rt.initSeen && error !== null && row.claude_session_id !== null;
+    if (staleResume) {
+      store.setClaudeSessionId(rt.sessionId, null);
+      this.recordNotice(
+        rt.sessionId,
+        `Claude could not resume conversation ${row.claude_session_id}; the next turn starts a new conversation.`,
+      );
+      this.deps.log.warn({ session_id: rt.sessionId, claude_session_id: row.claude_session_id }, "stale claude session id cleared");
+    }
     let state: SessionState;
     if (row.state === "closed") state = "closed";
+    else if (staleResume) state = "detached";
     else if (expected) state = "detached";
     // Process chết: còn claude_session_id thì resume được ở turn sau.
     else state = row.claude_session_id ? "detached" : "error";

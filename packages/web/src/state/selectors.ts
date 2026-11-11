@@ -1,10 +1,21 @@
 // Các phép suy dẫn thuần từ AppState cho UI.
 import type { BusEvent, BusEventType, Session, Task, TaskUsage, Ticket, Worker } from "@claude-bridge/protocol";
 import { isTerminalTaskState } from "@claude-bridge/protocol";
+import { safeHref } from "../lib/safe-href";
 import type { AppState, StreamState } from "./types";
 import { streamKeyForSession, streamKeyForTask } from "./reducer";
 
 const EMPTY_STREAM: StreamState = { records: [], lastId: 0, loaded: false };
+
+/** Các luồng đang hiển thị: phiên planner đang chọn, orchestrator, task đang mở. */
+export function displayedStreamKeys(state: AppState): Set<string> {
+  const keys = new Set<string>();
+  if (state.plannerSessionId) keys.add(streamKeyForSession(state.plannerSessionId));
+  const orch = orchestratorSession(state);
+  if (orch) keys.add(streamKeyForSession(orch.session_id));
+  if (state.openTaskId) keys.add(streamKeyForTask(state.openTaskId));
+  return keys;
+}
 
 export function sessionStream(state: AppState, sessionId: string | null): StreamState {
   return sessionId ? (state.streams[streamKeyForSession(sessionId)] ?? EMPTY_STREAM) : EMPTY_STREAM;
@@ -164,15 +175,18 @@ export function filterEvents(events: BusEvent[], filter: EventFilter): BusEvent[
 /** Suy ra base URL Jira từ URL ticket bất kỳ ("https://jira.x/browse/SH-1" -> "https://jira.x"). */
 export function jiraBaseUrl(tickets: Ticket[]): string | null {
   for (const t of tickets) {
+    // Bỏ qua URL không phải http(s) để một ticket lỗi không làm hỏng mọi link suy ra.
+    if (!safeHref(t.url)) continue;
     const m = /^(.*)\/browse\/[^/]+$/.exec(t.url ?? "");
     if (m?.[1]) return m[1];
   }
   return null;
 }
 
+/** URL ticket (chưa chắc an toàn: nơi render vẫn phải qua safeHref/ExternalLink). */
 export function ticketUrl(key: string, tickets: Ticket[]): string | null {
   const t = tickets.find((x) => x.key === key);
-  if (t?.url) return t.url;
+  if (t?.url && safeHref(t.url)) return t.url;
   const base = jiraBaseUrl(tickets);
   return base ? `${base}/browse/${encodeURIComponent(key)}` : null;
 }

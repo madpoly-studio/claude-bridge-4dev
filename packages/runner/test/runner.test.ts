@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { busToolFullName, WORKER_TOOLS } from "@claude-bridge/protocol";
 import { afterEach, describe, expect, it } from "vitest";
+import { killProcessTree, type KillTreeFn } from "../src/processTree.js";
 import { waitFor } from "./helpers/fakeBus.js";
 import { hasGit, isProcessAlive, startHarness, WORKER_ID, type Harness } from "./helpers/harness.js";
 
@@ -172,6 +173,83 @@ describe.skipIf(!hasGit)("worker runner against a fake bus", () => {
       return (c.body as { current_task_id: string | null }).current_task_id === taskId;
     });
     expect(heartbeat).toBeDefined();
+  });
+
+  it("normal exit with a grandchild still running: the grandchild is killed before exited is reported", async () => {
+    harness = await startHarness({ slotEnv: { FAKE_CLAUDE_GRANDCHILD: "1" } });
+    const taskId = harness.bus.enqueue(WORKER_ID).task.task_id;
+    const exited = await waitFor(() => harness!.bus.exited.get(taskId), 15_000, "exited");
+
+    expect(exited).toMatchObject({ exit_code: 0, reason: null });
+    const record = readRecord(harness);
+    expect(record.grandchild_pid).toEqual(expect.any(Number));
+    expect(isProcessAlive(record.pid)).toBe(false);
+    expect(isProcessAlive(record.grandchild_pid!)).toBe(false);
+    expect(harness.logLines.join("\n")).toMatch(/left behind by claude/);
+  });
+
+  it("cancel arriving after claude exited by itself: still reported as a normal exit", async () => {
+    harness = await startHarness();
+    const { bus } = harness;
+    // Keep the run in its reporting phase (events retrying) long enough for a heartbeat to deliver the cancel.
+    bus.failEventsTimes = 1_000_000;
+    const taskId = bus.enqueue(WORKER_ID).task.task_id;
+    await waitFor(() => existsSync(harness!.recordFile) || undefined, 10_000, "claude to start");
+    const pid = readRecord(harness).pid;
+    await waitFor(() => !isProcessAlive(pid) || undefined, 10_000, "claude to exit");
+
+    const beatsFor = (): number =>
+      bus.callsTo("POST", `/runners/${WORKER_ID}/heartbeat`).filter((c) => (c.body as { current_task_id: string | null }).current_task_id === taskId)
+        .length;
+    bus.requestCancel(taskId);
+    const before = beatsFor();
+    await waitFor(() => beatsFor() >= before + 2 || undefined, 10_000, "heartbeats answered with cancel");
+    bus.failEventsTimes = 0;
+    const exited = await waitFor(() => bus.exited.get(taskId), 10_000, "exited");
+
+    expect(exited).toMatchObject({ exit_code: 0, reason: null, message: null });
+    expect(harness.logLines.join("\n")).toMatch(/stop request after the process exited, ignoring/);
+  });
+
+  it("kill that does not work: reports exited after the kill deadline, quarantines the slot, resumes once the process is gone", async () => {
+    let killWorks = false;
+    const killTree: KillTreeFn = (child, graceMs, logger) => (killWorks ? killProcessTree(child, graceMs, logger) : Promise.resolve());
+    harness = await startHarness({
+      slotEnv: { FAKE_CLAUDE_MODE: "hang" },
+      timings: { killDeadlineMs: 500, quarantinePollMs: 200 },
+      killTree,
+    });
+    const { bus } = harness;
+    try {
+      const first = bus.enqueue(WORKER_ID).task.task_id;
+      await waitFor(() => bus.started.get(first), 10_000, "started");
+      const stuckPid = readRecord(harness).pid;
+
+      bus.requestCancel(first);
+      const exited = await waitFor(() => bus.exited.get(first), 10_000, "exited");
+      expect(exited).toMatchObject({ exit_code: null, reason: "cancelled", message: "process did not terminate after kill" });
+      expect(isProcessAlive(stuckPid)).toBe(true);
+
+      // Quarantined: no long-poll, no new task, but heartbeats go on without a current task.
+      const mark = bus.calls.length;
+      const second = bus.enqueue(WORKER_ID).task.task_id;
+      await new Promise((r) => setTimeout(r, 1_500));
+      const during = bus.calls.slice(mark);
+      expect(during.filter((c) => c.method === "GET" && c.path.startsWith(`/runners/${WORKER_ID}/next`))).toHaveLength(0);
+      const beats = during.filter((c) => c.path === `/runners/${WORKER_ID}/heartbeat`);
+      expect(beats.length).toBeGreaterThanOrEqual(1);
+      expect(beats.every((c) => (c.body as { current_task_id: string | null }).current_task_id === null)).toBe(true);
+      expect(bus.started.has(second)).toBe(false);
+      expect(harness.logLines.join("\n")).toMatch(/slot quarantined/);
+
+      // The retried kill works: the slot resumes and takes the waiting task.
+      killWorks = true;
+      await waitFor(() => bus.started.get(second), 10_000, "second task started");
+      expect(isProcessAlive(stuckPid)).toBe(false);
+      expect(harness.logLines.join("\n")).toMatch(/stuck claude process is gone/);
+    } finally {
+      killWorks = true;
+    }
   });
 
   it("timeout: kills the process and reports exited(timeout)", async () => {
