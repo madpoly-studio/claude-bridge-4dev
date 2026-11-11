@@ -1,0 +1,84 @@
+import { writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { DEFAULTS } from "@claude-bridge/protocol";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ConfigError, DEFAULT_JIRA_CREATE_TOOL_PATTERN, loadConfig } from "../src/config.js";
+import { resolveRunnerBootstrapToken } from "../src/bus/tokens.js";
+import { removeDir, tempDir } from "./helpers.js";
+
+describe("config", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = tempDir();
+  });
+  afterEach(() => removeDir(dir));
+
+  it("uses defaults when no file exists", () => {
+    const cfg = loadConfig({}, dir);
+    expect(cfg).toMatchObject({
+      port: DEFAULTS.PORT,
+      data_dir: join(dir, "data"),
+      max_concurrency: 2,
+      task_timeout_minutes: 60,
+      agent_label: "agent",
+      claude_auth_mode: "subscription",
+      jira_create_tool_pattern: DEFAULT_JIRA_CREATE_TOOL_PATTERN,
+      allowed_origins: [],
+      config_path: null,
+    });
+    expect(new RegExp(cfg.jira_create_tool_pattern).test("mcp__jira__create_issue")).toBe(true);
+    expect(new RegExp(cfg.jira_create_tool_pattern).test("mcp__jira__get_issue")).toBe(false);
+  });
+
+  it("reads the file, resolves paths against it, and applies env overrides", () => {
+    const file = join(dir, "bridge.config.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        port: 9000,
+        data_dir: "./state",
+        allowed_origins: ["https://a.example"],
+        repos: [{ name: "r", path: "D:/r" }],
+        jira_env_file: ".env",
+        max_concurrency: 3,
+      }),
+    );
+    const cfg = loadConfig(
+      { BRIDGE_CONFIG: file, MAX_CONCURRENCY: "5", ALLOWED_ORIGINS: "https://x.example, https://y.example", BRIDGE_PAIRING_TOKEN: "p".repeat(20) },
+      "C:/elsewhere",
+    );
+    expect(cfg).toMatchObject({
+      port: 9000,
+      data_dir: join(dir, "state"),
+      jira_env_file: join(dir, ".env"),
+      max_concurrency: 5,
+      allowed_origins: ["https://x.example", "https://y.example"],
+      repos: [{ name: "r", path: "D:/r", project_key: null }],
+      pairing_token: "p".repeat(20),
+      config_path: file,
+    });
+  });
+
+  it("rejects invalid values and unknown keys", () => {
+    writeFileSync(join(dir, "bridge.config.json"), JSON.stringify({ max_concurrency: 0, bogus: true }));
+    expect(() => loadConfig({}, dir)).toThrow(ConfigError);
+    expect(() => loadConfig({ BRIDGE_CONFIG: "missing.json" }, dir)).toThrow(/missing file/);
+    expect(() => loadConfig({ BRIDGE_PORT: "abc" }, join(dir, "nowhere"))).toThrow(/BRIDGE_PORT/);
+    expect(() => loadConfig({ CLAUDE_AUTH_MODE: "magic" }, join(dir, "nowhere"))).toThrow(ConfigError);
+  });
+
+  it("bridge.config.example.json at the repo root is valid", () => {
+    const example = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "bridge.config.example.json");
+    const cfg = loadConfig({ BRIDGE_CONFIG: example }, dir);
+    expect(cfg.repos.length).toBeGreaterThan(0);
+    expect(cfg.pairing_token).toBeNull();
+  });
+
+  it("runner bootstrap token: config wins, else generated once and persisted", () => {
+    expect(resolveRunnerBootstrapToken("configured-token-0123456789", dir)).toBe("configured-token-0123456789");
+    const generated = resolveRunnerBootstrapToken(null, dir);
+    expect(generated.length).toBeGreaterThanOrEqual(32);
+    expect(resolveRunnerBootstrapToken(null, dir)).toBe(generated);
+  });
+});

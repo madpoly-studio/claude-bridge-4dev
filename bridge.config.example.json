@@ -1,0 +1,24 @@
+{
+  "port": 8787,
+  "data_dir": "./data",
+  "allowed_origins": ["https://bridge.example.com", "http://localhost:5173"],
+  "repos": [
+    { "name": "sh-game", "path": "D:/repos/sh-game", "project_key": "SH" },
+    { "name": "shared-tools", "path": "D:/repos/shared-tools", "project_key": null }
+  ],
+  "projects": ["SH"],
+  "max_concurrency": 2,
+  "task_timeout_minutes": 60,
+  "heartbeat_seconds": 15,
+  "heartbeat_lost_seconds": 45,
+  "assign_start_timeout_seconds": 60,
+  "wake_debounce_seconds": 10,
+  "orch_tick_minutes": 10,
+  "jira_poll_seconds": 60,
+  "agent_label": "agent",
+  "claude_auth_mode": "subscription",
+  "jira_create_tool_pattern": "(^|__)(create_issue|jira_create_issue|createJiraIssue|create_jira_issue)$",
+  "jira_env_file": "D:/repos/sh-game/.env",
+  "pairing_token": null,
+  "runner_bootstrap_token": null
+}
