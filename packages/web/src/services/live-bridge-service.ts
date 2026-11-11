@@ -26,6 +26,12 @@ function isSession(v: unknown): v is Session {
   return typeof v === "object" && v !== null && "session_id" in v && "role" in v;
 }
 
+/** Backend bọc kết quả trong một khóa (`{session}`, `{sessions}`); nhận cả dạng trần lẫn dạng bọc. */
+function unwrap(v: unknown, key: string): unknown {
+  if (typeof v === "object" && v !== null && !Array.isArray(v) && key in v) return (v as Record<string, unknown>)[key];
+  return v;
+}
+
 export class LiveBridgeService implements BridgeActions {
   private client: BridgeClient | null = null;
   /** Khóa luồng đã gửi open trong kết nối hiện tại (server cần open lại sau mỗi lần reconnect). */
@@ -83,8 +89,9 @@ export class LiveBridgeService implements BridgeActions {
 
   async createPlannerSession(repo: string, title?: string): Promise<boolean> {
     const payload: ClientPayloads["session.create"] = title ? { role: "planner", repo, title } : { role: "planner", repo };
-    const result = await this.request("session.create", payload, "Không tạo được phiên mới");
-    if (result === undefined) return false;
+    const raw = await this.request("session.create", payload, "Không tạo được phiên mới");
+    if (raw === undefined) return false;
+    const result = unwrap(raw, "session");
     if (isSession(result)) {
       this.store.dispatch({ type: "local/session", session: result });
       await this.selectPlannerSession(result.session_id);
@@ -183,7 +190,10 @@ export class LiveBridgeService implements BridgeActions {
   }
 
   private async loadPlannerSessions(): Promise<void> {
-    const result = await this.request("session.list", { role: "planner" }, "Không tải được danh sách phiên planner");
+    const result = unwrap(
+      await this.request("session.list", { role: "planner" }, "Không tải được danh sách phiên planner"),
+      "sessions",
+    );
     if (isSessionList(result)) this.store.dispatch({ type: "local/sessions", sessions: result });
     const state = this.store.getState();
     const preferred = state.plannerSessionId ?? readStorage(STORAGE_KEYS.plannerSession);
