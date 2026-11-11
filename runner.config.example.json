@@ -1,0 +1,38 @@
+{
+  "_comment": "Copy to runner.config.json. Unknown keys such as _comment are ignored. Relative paths resolve against this file's directory. See packages/runner/README.md.",
+  "bus_url": "http://127.0.0.1:8787",
+  "bootstrap_token_file": "data/runner-bootstrap.token",
+  "heartbeat_seconds": 15,
+  "claude_command": ["claude"],
+  "slots": [
+    {
+      "worker_id": "w-sh-01",
+      "repo": "sh-client",
+      "worktree_path": "D:/work/worktrees/sh-client-w01",
+      "_comment_allowed_tools": "Per-repo allowlist is an OPEN item (design §6): keep it config-driven. The three bridge-bus worker tools are always added by the runner. The mcp__jira__* / mcp__gitlab__* names are placeholders: use the tool names exposed by the MCP servers listed in mcp_config_files.",
+      "allowed_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Edit",
+        "Write",
+        "Bash(git:*)",
+        "mcp__jira__get_issue",
+        "mcp__jira__add_comment",
+        "mcp__gitlab__create_merge_request"
+      ],
+      "disallowed_tools": ["Bash(git push --force:*)", "WebFetch"],
+      "_comment_mcp_config_files": "Extra MCP servers for this repo (Jira, GitLab). Required because the worker runs with --strict-mcp-config.",
+      "mcp_config_files": ["config/mcp/jira-gitlab.json"],
+      "permission_mode": "dontAsk",
+      "extra_args": ["--model", "sonnet"],
+      "env": {}
+    },
+    {
+      "worker_id": "w-sh-02",
+      "repo": "sh-client",
+      "worktree_path": "D:/work/worktrees/sh-client-w02",
+      "allowed_tools": ["Read", "Grep", "Glob", "Edit", "Write", "Bash(git:*)"]
+    }
+  ]
+}

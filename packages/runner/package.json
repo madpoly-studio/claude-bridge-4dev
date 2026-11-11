@@ -6,12 +6,13 @@
   "main": "./dist/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p test/tsconfig.json",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "vitest run"
   },
   "dependencies": {
-    "@claude-bridge/protocol": "workspace:*"
+    "@claude-bridge/protocol": "workspace:*",
+    "zod": "4"
   }
 }
