@@ -11,10 +11,12 @@
     "build": "pnpm -r run build",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
-    "dev:backend": "pnpm --filter @claude-bridge/backend dev",
-    "dev:runner": "pnpm --filter @claude-bridge/runner dev",
+    "test:e2e": "vitest run --config e2e/vitest.config.ts",
+    "dev:backend": "tsx watch packages/backend/src/index.ts",
+    "dev:runner": "tsx packages/runner/src/index.ts",
     "dev:web": "pnpm --filter @claude-bridge/web dev",
-    "test:e2e": "vitest run --config e2e/vitest.config.ts"
+    "start:backend": "node packages/backend/dist/index.js",
+    "start:runner": "node packages/runner/dist/index.js"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

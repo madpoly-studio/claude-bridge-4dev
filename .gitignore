@@ -23,3 +23,8 @@ data/
 .DS_Store
 Thumbs.db
 *.log
+
+# Cấu hình cục bộ (chứa đường dẫn máy, có thể chứa token)
+bridge.config.json
+runner.config.json
+config/mcp/
