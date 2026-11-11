@@ -1,0 +1,25 @@
+# Tài liệu requirement nội bộ, không đưa lên repo
+requirement/
+
+# Dependency / build
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+
+# Cấu hình và dữ liệu cục bộ
+.env
+.env.*
+!.env.example
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
