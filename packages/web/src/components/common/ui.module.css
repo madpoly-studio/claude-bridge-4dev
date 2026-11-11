@@ -1,0 +1,213 @@
+/* Primitive dùng chung: nút, chip, badge, chữ mono. */
+
+.btn {
+  min-height: var(--tap);
+  padding: 0 var(--sp-6);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+  transition: background-color 0.12s, border-color 0.12s;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--color-text-dim);
+}
+
+.btn:disabled,
+.btn[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.primary {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  border-color: transparent;
+  font-weight: 600;
+  padding: 0 var(--sp-7);
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+  border-color: transparent;
+}
+
+.ghost {
+  background: transparent;
+  color: var(--color-text-dim);
+}
+
+.ghost:hover:not(:disabled) {
+  color: var(--color-text);
+}
+
+.accentGhost {
+  background: transparent;
+  color: var(--color-accent);
+  font-weight: 500;
+}
+
+.warnOutline {
+  background: transparent;
+  color: var(--color-warn);
+  border-color: var(--color-warn);
+  font-weight: 500;
+}
+
+.warnOutline:hover:not(:disabled) {
+  background: var(--color-warn-bg);
+  border-color: var(--color-warn);
+}
+
+.small {
+  font-size: var(--fs-md);
+  padding: 0 var(--sp-5);
+}
+
+.iconBtn {
+  min-width: var(--tap);
+  padding: 0;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.dim {
+  color: var(--color-text-dim);
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  color: var(--color-text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+
+.tagWarn {
+  background: var(--color-warn-chip);
+  color: var(--color-warn);
+  font-weight: 500;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--sp-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: 1.4;
+  border: 1px solid transparent;
+}
+
+.badgeAccent {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+.badgeOk {
+  background: var(--color-surface-2);
+  border-color: var(--color-ok);
+  color: var(--color-ok);
+}
+
+.badgeOffline {
+  background: transparent;
+  border-color: var(--color-offline);
+  color: var(--color-text-dim);
+}
+
+.badgeWarn {
+  background: var(--color-warn-chip);
+  color: var(--color-warn);
+}
+
+.badgeDanger {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger);
+}
+
+.sectionLabel {
+  font-size: var(--fs-sm);
+  color: var(--color-text-dim);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.fieldLabel {
+  font-size: var(--fs-sm);
+  color: var(--color-text-dim);
+}
+
+.input {
+  min-height: var(--tap);
+  width: 100%;
+  min-width: 0;
+  padding: var(--sp-4) var(--sp-5);
+  background: var(--color-bg);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.input:focus-visible {
+  border-color: var(--color-accent);
+}
+
+.textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.select {
+  appearance: none;
+  min-height: var(--tap);
+  padding: 0 calc(var(--sp-5) * 2 + 14px) 0 var(--sp-5);
+  background-color: var(--color-surface-2);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23E7EAF0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--sp-5) center;
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  max-width: 100%;
+  text-overflow: ellipsis;
+}
+
+.select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.errorText {
+  color: var(--color-danger);
+  font-size: var(--fs-md);
+}
+
+.empty {
+  color: var(--color-text-dim);
+  font-size: var(--fs-md);
+  padding: var(--sp-5) 0;
+}

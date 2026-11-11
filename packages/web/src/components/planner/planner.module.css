@@ -1,0 +1,130 @@
+.repoTag {
+  font-family: var(--font-mono);
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+}
+
+.sessionSelect {
+  font-size: var(--fs-md);
+  flex: 10 1 7rem;
+  min-width: 6rem;
+  max-width: 18rem;
+}
+
+/* Card bản nháp ticket */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  padding: var(--sp-6);
+  background: var(--color-surface);
+  border: 1px solid var(--color-warn);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 0 0 3px rgb(242 166 90 / 0.12);
+}
+
+.cardHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.cardTitle {
+  font-weight: 600;
+  margin: 0;
+  font-size: var(--fs-base);
+}
+
+.draftTitle {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.sectionText {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.criteria {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+}
+
+.toolName {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--color-text-dim);
+  overflow-wrap: anywhere;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.jsonEditor {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  min-height: 12rem;
+}
+
+.otherPending {
+  align-self: stretch;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-5);
+  border: 1px solid var(--color-warn-border);
+  background: var(--color-warn-bg);
+  border-radius: var(--radius);
+  font-size: var(--fs-md);
+}
+
+/* Dialog phiên mới */
+
+.dialogBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  padding: var(--sp-7);
+}
+
+.dialogTitle {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.dialogActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--sp-3);
+}
+
+.spacer {
+  flex: 1 1 auto;
+}

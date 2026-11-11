@@ -1,0 +1,164 @@
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-5) var(--sp-7);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.key {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-lg);
+  font-weight: 500;
+  color: var(--color-accent);
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 1.125rem;
+  padding: var(--sp-7);
+}
+
+.title {
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.grid {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-5);
+}
+
+.cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cell dt {
+  font-size: var(--fs-sm);
+  color: var(--color-text-dim);
+}
+
+.cell dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  overflow-wrap: anywhere;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+}
+
+.placeholderLink {
+  min-height: var(--tap);
+  padding: 0 var(--sp-6);
+  display: inline-flex;
+  align-items: center;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius);
+  color: var(--color-text-dim);
+}
+
+.failBox {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-4) var(--sp-5);
+  border: 1px solid var(--color-warn-border);
+  background: var(--color-warn-bg);
+  border-radius: var(--radius);
+  font-size: var(--fs-md);
+}
+
+.failTitle {
+  color: var(--color-warn);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.log {
+  list-style: none;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--sp-1) var(--sp-5);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.logRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--color-surface-2);
+}
+
+.logRow:last-child {
+  border-bottom: 0;
+}
+
+.logTime {
+  color: var(--color-text-dim);
+}
+
+.logSource {
+  flex: 0 0 4rem;
+  overflow-wrap: anywhere;
+}
+
+.logDetail {
+  flex: 1 1 12rem;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.toneAccent {
+  color: var(--color-accent);
+}
+
+.toneDim {
+  color: var(--color-text-dim);
+}
+
+.toneWarn {
+  color: var(--color-warn);
+}
+
+.toneNormal {
+  color: var(--color-text);
+}
+
+.note {
+  font-size: var(--fs-sm);
+  color: var(--color-text-dim);
+}

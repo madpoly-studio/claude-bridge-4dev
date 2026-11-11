@@ -1,0 +1,51 @@
+.stack {
+  display: flex;
+  flex-direction: column;
+}
+
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3) var(--sp-5);
+  padding: var(--sp-3) var(--sp-7);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--fs-md);
+  background: var(--color-surface);
+}
+
+.warn {
+  background: var(--color-warn-bg);
+  border-bottom-color: var(--color-warn-border);
+}
+
+.danger {
+  background: var(--color-danger-bg);
+  border-bottom-color: var(--color-danger-border);
+}
+
+.info {
+  background: var(--color-surface);
+}
+
+.label {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.warn .label {
+  color: var(--color-warn);
+}
+
+.danger .label {
+  color: var(--color-danger);
+}
+
+.info .label {
+  color: var(--color-accent);
+}
+
+.text {
+  flex: 1 1 14rem;
+  min-width: 0;
+}

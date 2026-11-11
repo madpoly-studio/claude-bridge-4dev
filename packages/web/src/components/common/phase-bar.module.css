@@ -1,0 +1,70 @@
+.compact {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.segments {
+  display: flex;
+  gap: 3px;
+  flex: 1 1 auto;
+}
+
+.segment {
+  flex: 1 1 0;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--color-border);
+}
+
+.done {
+  background: var(--color-accent);
+}
+
+.failed {
+  background: var(--color-warn);
+}
+
+.current {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--color-text-dim);
+  white-space: nowrap;
+}
+
+.labeled {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--sp-2);
+}
+
+.labeledItem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.labeledItem .segment {
+  flex: 0 0 auto;
+}
+
+.phaseName {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-text-dim);
+  overflow-wrap: anywhere;
+}
+
+.phaseNameDone {
+  color: var(--color-text);
+}
+
+.phaseNameCurrent {
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}

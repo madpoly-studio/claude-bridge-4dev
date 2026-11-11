@@ -1,0 +1,27 @@
+{
+  "name": "@claude-bridge/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@claude-bridge/protocol": "workspace:*",
+    "react": "18",
+    "react-dom": "18"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "10",
+    "@testing-library/react": "16",
+    "@types/react": "18",
+    "@types/react-dom": "18",
+    "@vitejs/plugin-react": "4",
+    "jsdom": "25",
+    "vite": "6"
+  }
+}
