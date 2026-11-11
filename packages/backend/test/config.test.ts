@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULTS } from "@claude-bridge/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ConfigError, DEFAULT_JIRA_CREATE_TOOL_PATTERN, loadConfig } from "../src/config.js";
+import { ConfigError, DEFAULT_JIRA_CREATE_TOOL_PATTERN, loadConfig, parseConfig } from "../src/config.js";
 import { resolveRunnerBootstrapToken } from "../src/bus/tokens.js";
 import { removeDir, tempDir } from "./helpers.js";
 
@@ -73,6 +73,28 @@ describe("config", () => {
     const cfg = loadConfig({ BRIDGE_CONFIG: example }, dir);
     expect(cfg.repos.length).toBeGreaterThan(0);
     expect(cfg.pairing_token).toBeNull();
+  });
+
+  it("planner / orchestrators: defaults, path resolution and validation", () => {
+    const defaults = parseConfig({}, dir);
+    expect(defaults.planner).toEqual({ mcp_servers: {}, allowed_tools: [], system_prompt_append: null, model: null, setting_sources: [] });
+    expect(defaults).toMatchObject({ orchestrators: {}, orchestrator_autostart: true, claude_executable: null });
+
+    const cfg = parseConfig(
+      {
+        projects: ["SH"],
+        planner: { allowed_tools: ["mcp__jira__jira_get_*"], mcp_servers: { jira: { type: "http", url: "http://127.0.0.1:9000/mcp" } } },
+        orchestrators: { SH: { cwd: "./orch/SH", setting_sources: ["project"] } },
+      },
+      dir,
+    );
+    expect(cfg.orchestrators.SH).toMatchObject({ cwd: join(dir, "orch", "SH"), setting_sources: ["project"], allowed_tools: [] });
+    expect(cfg.planner.mcp_servers.jira).toEqual({ type: "http", url: "http://127.0.0.1:9000/mcp" });
+
+    expect(() => parseConfig({ projects: [], orchestrators: { SH: { cwd: "x" } } }, dir)).toThrow(/not listed in projects/);
+    expect(() => parseConfig({ planner: { allowed_tools: ["mcp__*__get"] } }, dir)).toThrow(/trailing \* wildcard/);
+    expect(() => parseConfig({ planner: { mcp_servers: { "bridge-bus": { command: "x" } } } }, dir)).toThrow(/reserved/);
+    expect(() => parseConfig({ planner: { mcp_servers: { jira: { type: "http" } } } }, dir)).toThrow(ConfigError);
   });
 
   it("runner bootstrap token: config wins, else generated once and persisted", () => {

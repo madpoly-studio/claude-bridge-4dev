@@ -1,6 +1,7 @@
 # @claude-bridge/backend
 
-Bridge backend: Task Bus (SQLite + MCP + runner HTTP API), Event Log, WebSocket hub with the Auth Gate.
+Bridge backend: Task Bus (SQLite + MCP + runner HTTP API), Event Log, WebSocket hub with the Auth Gate,
+Session Manager (planner / orchestrator over the Agent SDK), Permission Broker, Wake Dispatcher and Jira Reader.
 It binds to `127.0.0.1` only.
 
 ## Run
@@ -32,6 +33,108 @@ config/env, or from `<data_dir>/runner-bootstrap.token` (generated on first star
 
 Plain JSON-RPC to `/mcp` needs `Accept: application/json, text/event-stream`.
 
+## Claude sessions (Phase 3-5)
+
+### Configuration keys
+
+| Key | Default | Meaning |
+|---|---|---|
+| `claude_auth_mode` | `subscription` | `subscription`: `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` are removed from the Claude child env so the CLI login (seat) is used. `api_key`: `ANTHROPIC_API_KEY` is required; the backend refuses to start without it |
+| `claude_executable` | `null` | Path of the `claude` binary; `null` uses the binary bundled with the Agent SDK |
+| `planner.mcp_servers` | `{}` | MCP servers for planner sessions (Agent SDK `mcpServers` shape: stdio `{command,args,env}` or `{type:"http"/"sse",url,headers}`) |
+| `planner.allowed_tools` | `[]` | Extra allowed tools on top of `Read`, `Grep`, `Glob`, `ToolSearch`. Exact names or a trailing `*` (`mcp__jira__jira_get_*`) |
+| `planner.system_prompt_append` / `planner.model` | `null` | Appended to the built-in planner prompt / model override |
+| `planner.setting_sources` | `[]` | Claude Code settings sources to load (`user`, `project`, `local`). Empty = isolated; add `project` to load the repo's `CLAUDE.md` |
+| `orchestrators.<KEY>` | none | One orchestrator per Jira project (`KEY` must be in `projects`): `cwd` (dedicated folder, must exist), `mcp_servers`, `allowed_tools`, `system_prompt_append`, `model`, `setting_sources` |
+| `orchestrator_autostart` | `true` | Start every configured orchestrator when the backend listens; `false` = start on `project.select` or on the first message |
+| `jira_create_tool_pattern` | create_issue names | Regex of the Jira create-issue tool that goes through the approval gate |
+| `jira_env_file` | `null` | Team `.env` with `MPS_JIRA_URL`, `MPS_JIRA_PAT`, `MPS_JIRA_PROJECT_KEY`, `MPS_CA_BUNDLE` (CA path may be relative to the `.env` folder) |
+
+Which Jira MCP server the team uses is still open (section 17.3). The example config uses
+[`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian) (`uvx mcp-atlassian`, Jira Server PAT in
+`JIRA_PERSONAL_TOKEN`), whose tools become `mcp__jira__jira_search`, `mcp__jira__jira_get_issue`,
+`mcp__jira__jira_create_issue`, ... The default `jira_create_tool_pattern` matches `mcp__jira__jira_create_issue`.
+Check the tool names in the `init` event (`tools`) of a planner session and adjust `allowed_tools` / the pattern.
+
+### Tool permissions
+
+Every bridge session runs with `permissionMode: "default"`, `strictMcpConfig: true` and `settingSources` from config
+(`[]` by default, so user-level allow rules cannot widen permissions). The allowlist is enforced three times:
+
+1. `tools` lists only the allowed built-ins (planner: `Read`, `Grep`, `Glob`, `ToolSearch`; orchestrator: `ToolSearch`).
+2. A `PreToolUse` hook (`onFailure: "block"`) denies every tool outside the allowlist. This also covers tools that an
+   allow rule from a loaded settings source would pre-approve. For the create-issue tool it returns `ask`, so the call
+   always reaches `canUseTool` (the approval gate) even when a rule allows it.
+3. `canUseTool` denies anything outside the allowlist, and planner reads outside the repo (`blockedPath`).
+
+Only exact MCP names from the allowlist are passed as `allowedTools`; wildcard entries go through `canUseTool`.
+The orchestrator gets `bridge-bus` (`type: "http"`, `alwaysLoad: true`, bearer = orchestrator token) plus its configured
+servers; the create-issue tool is always denied for it.
+
+### Session lifecycle and resume
+
+- `session.create {role:"planner", repo}`: `repo` is a name from `repos`; the cwd is that repo's path (never taken from
+  the UI). The row is written at once (`state: starting`); the Claude process is spawned on the first `session.send`.
+  The creating connection is subscribed to the session's events.
+- Every SDK message is written to `session_events` (origin `agent`) before it is pushed as `session.event`. Typed text
+  is stored as `{type:"user_text", text}` with origin `user`; wake turns use origin `system`; bridge notices (process
+  died) are `{type:"bridge_notice", message}` with origin `system`.
+- The `init` message stores `claude_session_id` and moves the session to `active`.
+- `busy` is true from a send until the turn's `result`; every change is pushed as `session.updated` (broadcast).
+- Backend start: sessions in `starting` / `active` become `detached` (graceful shutdown does the same). The next
+  `session.send` spawns the process with `resume: claude_session_id`; `session.open {session_id, since}` replays the
+  stored events (`session.history`) and subscribes to live ones in the same tick. A process that dies on its own makes
+  the session `detached` (resumable) or `error` (no init was received).
+- `session.interrupt` calls `Query.interrupt()`; `session.close` closes the query and sets `state: closed` (not allowed
+  for the orchestrator, which the backend manages).
+- `project.select` sets the connection's project and `status.project_key` (single user: the last selection wins) and
+  returns `{project_key, orchestrator_session}`. The snapshot carries open planner sessions + that project's orchestrator.
+
+### Orchestrator supervision
+
+The orchestrator session for a project is reused across restarts (resume by `claude_session_id`). If its process dies,
+the backend respawns it with resume after 1 s, 2 s, 4 s ... (max 60 s); `status.orchestrator` goes `restarting` then
+`alive`, or `dead` after 5 consecutive failures (a run of 5 min or a completed turn resets the count; a user message to a
+dead orchestrator restarts it). After a respawn a `tick` wake is queued so it rebuilds the picture. No turn is sent at
+startup; the first trigger (worker registration, tick) wakes it.
+
+### Permission Broker
+
+The planner's create-issue tool (`jira_create_tool_pattern`) is held in `canUseTool`: a `permission_requests` row is
+written and `permission.request` is broadcast. `permission.respond`:
+`allow` runs the tool with its input; `allow` + `updated_input` runs it with the edited input; `deny` gives the planner
+`reason` (or a default Vietnamese message) and the conversation continues. Every decision is stored and broadcast as
+`permission.resolved`. A pending request is denied with reason `expired` when its turn is interrupted, its session dies
+or closes, or the backend restarts. When the approved call's `tool_result` comes back without `is_error`, the ticket key
+is taken from the result (`key` / `issueKey` fields first, then a Jira key regex preferring the input's project) and the
+labels from the effective input (`labels`, `fields.labels`, `additional_fields.labels`), then `bus.emitTicketCreated`
+publishes `ticket.created`. A denied request never produces `ticket.created`.
+
+### Wake Dispatcher
+
+Triggers: `ticket.created` with `has_agent_label`, `task.completed`, `task.failed` (routed by the ticket key's project),
+`worker.registered` (all orchestrators), and a `tick` every `orch_tick_minutes`. Triggers within
+`wake_debounce_seconds` of the first one are merged into one `[bridge-event]` turn (`formatWakeTurn`, identifiers only,
+duplicates removed). If the orchestrator is mid-turn the events wait and are sent as one turn when its `result`
+arrives. Events for an orchestrator that is stopped or dead are dropped (it rebuilds its picture when it starts).
+User messages to the orchestrator are plain `session.send` turns, never debounced.
+
+### Jira Reader
+
+Reads the team `.env` (`jira_env_file`) once at startup. For each project in `projects` (or `MPS_JIRA_PROJECT_KEY`):
+`GET /rest/api/2/search` with
+`project = "<KEY>" AND labels = "<agent_label>" AND statusCategory != Done ORDER BY updated DESC`,
+`Authorization: Bearer <PAT>`, paginated. `blocked_by` = inward links of type `Blocks` / "is blocked by" whose issue is
+not done. Polls every `jira_poll_seconds` and at once on `ticket.created`, `task.completed`, `task.failed` and
+`tickets.refresh` (overlapping requests collapse into one more read). Pushes `tickets.updated` when the list changes;
+`status.jira` is `ok`, `error` (last read failed) or `unconfigured`. `MPS_CA_BUNDLE` is added to Node's root CAs for that
+agent only. The PAT is never logged. Read only.
+
+### Seat usage
+
+`status.seat_usage` / `status.rate_limited_until` come only from the SDK's `rate_limit_event` (and assistant messages
+with `error: "rate_limit"`), as decided for section 10.4.
+
 ## Behaviour notes
 
 - `max_concurrency` is checked against `assigned + running` at assign time, and `SystemStatus.running` reports the same
@@ -59,8 +162,31 @@ Plain JSON-RPC to `/mcp` needs `Accept: application/json, text/event-stream`.
 ## Extension points
 
 Everything is created in `createApp(config, opts)` (`src/app.ts`), which returns a `BridgeApp`:
-`{ config, app, db, eventLog, bus, core, runners, sweeper, tokens, status, hub, pairingToken, runnerBootstrapToken,
-baseUrl(), mcpUrl(), listen(), close() }`. New modules (sessions, permission, wake, jira) should be wired in `createApp`.
+`{ config, app, db, eventLog, bus, core, runners, sweeper, tokens, status, hub, agents, jira, pairingToken,
+runnerBootstrapToken, baseUrl(), mcpUrl(), listen(), close() }`. `opts.claudeDriver` replaces the Agent SDK driver
+(tests use `FakeClaudeDriver` from `src/claude/fakeDriver.ts`); `opts.timers` replaces the timers used for debounce,
+tick, Jira poll and restart backoff. Orchestrators, the wake tick and the Jira poll start in `listen()`.
+
+### Claude driver - `src/claude/driver.ts`
+
+```ts
+interface ClaudeDriver { start(options: ClaudeSessionOptions): ClaudeSessionHandle }
+interface ClaudeSessionHandle { messages: AsyncIterable<SDKMessage>; send(text): void; interrupt(): Promise<void>; close(): void }
+```
+
+`SdkClaudeDriver` runs `query({ prompt: AsyncIterable<SDKUserMessage>, options })`; `ClaudeSessionOptions` is a `Pick`
+of the SDK `Options` plus a required `cwd`.
+
+### Sessions - `bridge.agents`
+
+```ts
+agents.sessions: SessionManager        // createPlanner, get, list, history, ensureLive, sendText(id, text, "user" | "system"),
+                                       // interrupt, close; onUpdated / onMessage / onTurnEnded / onLive / onEnded
+agents.orchestrators: OrchestratorManager  // start(project), health(project), sessionFor(project), isReady(project)
+agents.broker: PermissionBroker        // listPending(), respond(...), onRequest / onResolved
+agents.wake: WakeDispatcher            // enqueue(project, WakeEvent), pendingEvents(project)
+bridge.jira.reader: JiraReader         // tickets(), status(), refresh()
+```
 
 ### Task Bus — `bridge.bus: TaskBus`
 
@@ -122,7 +248,10 @@ routeSessionEvent(record: SessionEventRecord): void
 - Auth: `TokenVerifier { verify(token): Promise<AuthPrincipal | null> }` (`src/ws/auth.ts`). Pass another implementation
   as `createApp(config, { tokenVerifier })` to add JWT / SSO.
 - Built in: `auth` (replies `auth.ok` and then `ack` with the same id), `subscribe`, `dispatch.pause`, `dispatch.resume`,
-  `task.open`, `tickets.refresh`.
+  `task.open`, `tickets.refresh` (replaced by the Jira Reader: `{refreshed, jira, count?}`), `project.select`,
+  `session.create` / `list` / `open` / `send` / `interrupt` / `close`, `permission.respond`. Acks: `session.create` and
+  `session.send` / `session.open` / `session.close` return `{session}`, `session.list` returns `{sessions}`,
+  `session.interrupt` returns `{interrupted}`, `permission.respond` returns `{request}`.
 
 ### System status — `bridge.status: StatusService`
 

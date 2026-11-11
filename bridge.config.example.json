@@ -19,6 +19,42 @@
   "claude_auth_mode": "subscription",
   "jira_create_tool_pattern": "(^|__)(create_issue|jira_create_issue|createJiraIssue|create_jira_issue)$",
   "jira_env_file": "D:/repos/sh-game/.env",
+  "claude_executable": null,
+  "planner": {
+    "mcp_servers": {
+      "jira": {
+        "command": "uvx",
+        "args": ["mcp-atlassian"],
+        "env": { "JIRA_URL": "https://jira.example.com", "JIRA_PERSONAL_TOKEN": "<PAT>", "JIRA_SSL_VERIFY": "true" }
+      }
+    },
+    "allowed_tools": ["mcp__jira__jira_search", "mcp__jira__jira_get_*"],
+    "system_prompt_append": null,
+    "model": null,
+    "setting_sources": []
+  },
+  "orchestrators": {
+    "SH": {
+      "cwd": "./orchestrators/SH",
+      "mcp_servers": {
+        "jira": {
+          "command": "uvx",
+          "args": ["mcp-atlassian"],
+          "env": {
+            "JIRA_URL": "https://jira.example.com",
+            "JIRA_PERSONAL_TOKEN": "<PAT>",
+            "JIRA_SSL_VERIFY": "true",
+            "READ_ONLY_MODE": "true"
+          }
+        }
+      },
+      "allowed_tools": ["mcp__jira__jira_search", "mcp__jira__jira_get_*"],
+      "system_prompt_append": null,
+      "model": null,
+      "setting_sources": ["project"]
+    }
+  },
+  "orchestrator_autostart": true,
   "pairing_token": null,
   "runner_bootstrap_token": null
 }

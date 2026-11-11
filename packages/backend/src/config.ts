@@ -1,7 +1,7 @@
 // Cấu hình backend: file `bridge.config.json` + override bằng biến môi trường (system design mục 13).
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
-import { DEFAULTS } from "@claude-bridge/protocol";
+import { BUS_MCP_SERVER_NAME, DEFAULTS } from "@claude-bridge/protocol";
 import { z } from "zod";
 
 /** Host luôn là loopback (mục 12). Không cấu hình được. */
@@ -11,6 +11,64 @@ export const DEFAULT_JIRA_CREATE_TOOL_PATTERN =
   "(^|__)(create_issue|jira_create_issue|createJiraIssue|create_jira_issue)$";
 
 const positiveInt = z.number().int().positive();
+
+/** Tên tool: chính xác, hoặc tiền tố kết thúc bằng một dấu `*` (ví dụ `mcp__jira__jira_get_*`). */
+const toolPatternSchema = z
+  .string()
+  .min(1)
+  .refine((p) => !p.slice(0, -1).includes("*"), { message: "only a single trailing * wildcard is supported" });
+
+const settingSourcesSchema = z.array(z.enum(["user", "project", "local"])).default([]);
+
+const mcpCommonFields = {
+  timeout: positiveInt.optional(),
+  alwaysLoad: z.boolean().optional(),
+};
+
+/** Cấu hình MCP server truyền nguyên cho Agent SDK (`Options.mcpServers`). */
+const mcpServerSchema = z.union([
+  z
+    .object({
+      type: z.literal("stdio").optional(),
+      command: z.string().min(1),
+      args: z.array(z.string()).optional(),
+      env: z.record(z.string(), z.string()).optional(),
+      ...mcpCommonFields,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.enum(["http", "sse"]),
+      url: z.url(),
+      headers: z.record(z.string(), z.string()).optional(),
+      ...mcpCommonFields,
+    })
+    .strict(),
+]);
+
+const mcpServersSchema = z
+  .record(z.string().regex(/^[A-Za-z0-9_-]+$/, "MCP server name: letters, digits, _ and - only"), mcpServerSchema)
+  .refine((servers) => !(BUS_MCP_SERVER_NAME in servers), { message: `"${BUS_MCP_SERVER_NAME}" is reserved for the bus` })
+  .default({});
+
+const roleFields = {
+  mcp_servers: mcpServersSchema,
+  allowed_tools: z.array(toolPatternSchema).default([]),
+  system_prompt_append: z.string().min(1).nullable().default(null),
+  model: z.string().min(1).nullable().default(null),
+  /** Nguồn settings của Claude Code được nạp; mặc định không nạp gì để allow rule của user không nới quyền. */
+  setting_sources: settingSourcesSchema,
+};
+
+const plannerSchema = z.object(roleFields).strict();
+
+const orchestratorSchema = z
+  .object({
+    /** Thư mục làm việc riêng của orchestrator (không phải repo code). */
+    cwd: z.string().min(1),
+    ...roleFields,
+  })
+  .strict();
 
 const repoSchema = z.object({
   name: z.string().min(1),
@@ -41,12 +99,22 @@ const fileSchema = z
       .refine(isValidRegex, { message: "must be a valid regular expression" })
       .default(DEFAULT_JIRA_CREATE_TOOL_PATTERN),
     jira_env_file: z.string().min(1).nullable().default(null),
+    /** Đường dẫn file thực thi `claude`; null = binary đi kèm Agent SDK. */
+    claude_executable: z.string().min(1).nullable().default(null),
+    planner: plannerSchema.prefault({}),
+    /** Orchestrator theo Jira project key; khóa phải nằm trong `projects`. */
+    orchestrators: z.record(z.string().min(1), orchestratorSchema).default({}),
+    /** true: khởi động mọi orchestrator đã cấu hình khi backend listen; false: khi project được chọn / có tin nhắn. */
+    orchestrator_autostart: z.boolean().default(true),
     pairing_token: z.string().min(16).nullable().default(null),
     runner_bootstrap_token: z.string().min(16).nullable().default(null),
   })
   .strict();
 
 export type RepoConfig = z.infer<typeof repoSchema>;
+export type McpServerConfigInput = z.infer<typeof mcpServerSchema>;
+export type PlannerConfig = z.infer<typeof plannerSchema>;
+export type OrchestratorConfig = z.infer<typeof orchestratorSchema>;
 export type BridgeConfig = z.infer<typeof fileSchema> & {
   /** Đường dẫn tuyệt đối đã resolve của data_dir. */
   data_dir: string;
@@ -106,7 +174,7 @@ function envOverrides(env: NodeJS.ProcessEnv): Record<string, unknown> {
 
 /**
  * Validate + chuẩn hóa một object cấu hình thô (dùng chung cho file và test).
- * `baseDir` dùng để resolve `data_dir` và `jira_env_file` tương đối.
+ * `baseDir` dùng để resolve `data_dir`, `jira_env_file` và `orchestrators.*.cwd` tương đối.
  */
 export function parseConfig(raw: unknown, baseDir: string, configPath: string | null = null): BridgeConfig {
   const result = fileSchema.safeParse(raw);
@@ -115,11 +183,21 @@ export function parseConfig(raw: unknown, baseDir: string, configPath: string | 
     throw new ConfigError(`invalid bridge config${configPath ? ` (${configPath})` : ""}: ${issues}`);
   }
   const cfg = result.data;
+  for (const key of Object.keys(cfg.orchestrators)) {
+    if (!cfg.projects.includes(key)) {
+      throw new ConfigError(
+        `invalid bridge config${configPath ? ` (${configPath})` : ""}: orchestrators.${key}: ${key} is not listed in projects`,
+      );
+    }
+  }
   const abs = (p: string): string => (isAbsolute(p) ? p : resolve(baseDir, p));
+  const orchestrators: Record<string, OrchestratorConfig> = {};
+  for (const [key, orch] of Object.entries(cfg.orchestrators)) orchestrators[key] = { ...orch, cwd: abs(orch.cwd) };
   return {
     ...cfg,
     data_dir: abs(cfg.data_dir),
     jira_env_file: cfg.jira_env_file === null ? null : abs(cfg.jira_env_file),
+    orchestrators,
     config_path: configPath,
   };
 }

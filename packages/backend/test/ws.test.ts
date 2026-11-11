@@ -1,77 +1,10 @@
 // WS hub: Auth Gate (Origin + token), subscribe/replay, push live, task.open, điểm mở rộng.
 import { WS_CLOSE } from "@claude-bridge/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import WebSocket from "ws";
 import { z } from "zod";
 import { WsError } from "../src/ws/hub.js";
-import { type TestContext, ORIGIN, PAIRING_TOKEN, registerRunners, removeDir, startBridge } from "./helpers.js";
-
-interface Msg {
-  id: string;
-  type: string;
-  payload: any;
-}
-
-class TestWs {
-  readonly messages: Msg[] = [];
-  private waiters: { pred: (m: Msg) => boolean; resolve: (m: Msg) => void }[] = [];
-  private n = 0;
-  readonly closed: Promise<{ code: number; reason: string }>;
-
-  constructor(readonly socket: WebSocket) {
-    socket.on("message", (data) => {
-      const msg = JSON.parse(data.toString()) as Msg;
-      this.messages.push(msg);
-      this.waiters = this.waiters.filter((w) => {
-        if (!w.pred(msg)) return true;
-        w.resolve(msg);
-        return false;
-      });
-    });
-    this.closed = new Promise((resolve) => socket.on("close", (code, reason) => resolve({ code, reason: reason.toString() })));
-  }
-
-  static open(url: string, origin: string | null = ORIGIN): Promise<TestWs> {
-    return new Promise((resolve, reject) => {
-      const socket = new WebSocket(url, origin ? { origin } : {});
-      const client = new TestWs(socket);
-      socket.once("open", () => resolve(client));
-      socket.once("error", reject);
-      socket.once("unexpected-response", (_req, res) => reject(new Error(`HTTP ${res.statusCode}`)));
-    });
-  }
-
-  waitFor(pred: (m: Msg) => boolean, timeoutMs = 3000): Promise<Msg> {
-    const found = this.messages.find(pred);
-    if (found) return Promise.resolve(found);
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("timed out waiting for message")), timeoutMs);
-      this.waiters.push({
-        pred,
-        resolve: (m) => {
-          clearTimeout(timer);
-          resolve(m);
-        },
-      });
-    });
-  }
-
-  send(type: string, payload: unknown = {}): string {
-    const id = `c-${++this.n}`;
-    this.socket.send(JSON.stringify({ id, type, payload }));
-    return id;
-  }
-
-  /** Gửi request, chờ ack / error cùng id. */
-  async request(type: string, payload: unknown = {}): Promise<Msg> {
-    const id = this.send(type, payload);
-    return this.waitFor((m) => m.id === id && (m.type === "ack" || m.type === "error"));
-  }
-
-  close(): void {
-    this.socket.close();
-  }
-}
+import { type TestContext, PAIRING_TOKEN, registerRunners, removeDir, startBridge } from "./helpers.js";
+import { TestWs } from "./wsClient.js";
 
 describe("WebSocket hub", () => {
   let ctx: TestContext;

@@ -11,6 +11,7 @@ import {
 import { type AppOptions, type BridgeApp, createApp } from "../src/app.js";
 import { type ConfigInput, parseConfig } from "../src/config.js";
 import type { Clock } from "../src/util/clock.js";
+import type { TimerHandle, Timers } from "../src/util/timers.js";
 
 export const T0 = Date.parse("2026-11-11T10:00:00.000Z");
 
@@ -143,4 +144,61 @@ export async function registerRunners(bridge: BridgeApp, ...ids: string[]): Prom
 
 export function busEventTypes(bridge: BridgeApp): string[] {
   return bridge.eventLog.readBusEventsSince(0).map((e) => e.type);
+}
+
+/** Timer giả chạy theo FakeClock: `advance` đẩy đồng hồ và gọi các timer đến hạn theo thứ tự thời gian. */
+export class FakeTimers implements Timers {
+  private seq = 0;
+  private readonly timers = new Map<number, { at: number; fn: () => void; interval: number | null }>();
+
+  constructor(private readonly clock: FakeClock) {}
+
+  setTimeout(fn: () => void, ms: number): TimerHandle {
+    const id = ++this.seq;
+    this.timers.set(id, { at: this.clock.now() + ms, fn, interval: null });
+    return id;
+  }
+
+  clearTimeout(handle: TimerHandle): void {
+    this.timers.delete(handle as number);
+  }
+
+  setInterval(fn: () => void, ms: number): TimerHandle {
+    const id = ++this.seq;
+    this.timers.set(id, { at: this.clock.now() + ms, fn, interval: ms });
+    return id;
+  }
+
+  clearInterval(handle: TimerHandle): void {
+    this.timers.delete(handle as number);
+  }
+
+  pending(): number {
+    return this.timers.size;
+  }
+
+  advance(ms: number): void {
+    const end = this.clock.now() + ms;
+    for (;;) {
+      let nextId: number | null = null;
+      let next: { at: number; fn: () => void; interval: number | null } | null = null;
+      for (const [id, t] of this.timers) {
+        if (t.at <= end && (next === null || t.at < next.at)) {
+          nextId = id;
+          next = t;
+        }
+      }
+      if (next === null || nextId === null) break;
+      this.clock.t = next.at;
+      if (next.interval === null) this.timers.delete(nextId);
+      else next.at += next.interval;
+      next.fn();
+    }
+    this.clock.t = end;
+  }
+}
+
+/** Chờ các microtask / I/O ngắn đang dở (luồng message của driver giả là async). */
+export async function settle(rounds = 5): Promise<void> {
+  for (let i = 0; i < rounds; i++) await new Promise<void>((resolve) => setImmediate(resolve));
 }
