@@ -88,12 +88,14 @@ export class BridgeClient {
   private state: ConnectionState = INITIAL_CONNECTION;
 
   constructor(options: BridgeClientOptions) {
+    // `??` thay vì spread: caller có thể truyền tường minh `undefined` (vd. LiveBridgeService
+    // chuyển tiếp option không đặt), spread sẽ ghi đè mặc định bằng undefined.
     this.opts = {
-      transport: webSocketTransport,
-      requestTimeoutMs: REQUEST_TIMEOUT_MS,
-      backoff: RECONNECT_BACKOFF,
-      now: () => Date.now(),
       ...options,
+      transport: options.transport ?? webSocketTransport,
+      requestTimeoutMs: options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS,
+      backoff: options.backoff ?? RECONNECT_BACKOFF,
+      now: options.now ?? (() => Date.now()),
     };
   }
 
