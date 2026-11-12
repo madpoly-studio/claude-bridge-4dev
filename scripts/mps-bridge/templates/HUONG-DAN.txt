@@ -1,0 +1,78 @@
+HƯỚNG DẪN SỬ DỤNG CLAUDE-BRIDGE
+Thư mục làm việc: {{WORKSPACE}}
+
+1. THƯ MỤC GỒM GÌ
+   settings.json   File DUY NHẤT bạn cần điền (Jira, project, repo, cổng, model).
+   start.cmd       Chạy dịch vụ (backend + runner + giao diện web) trong một cửa sổ.
+   update.cmd      Cập nhật claude-bridge lên bản mới nhất.
+   HUONG-DAN.txt   File này.
+   app\            Mã nguồn claude-bridge (đừng sửa).
+   generated\      Cấu hình sinh tự động từ settings.json. Bị xóa và ghi lại mỗi lần start: KHÔNG sửa tay.
+   data\           Dữ liệu của dịch vụ, pairing token (data\pairing-token.txt) và file khóa mps-bridge.lock.
+   orchestrators\  Thư mục làm việc của orchestrator, mỗi Jira project một thư mục.
+   worktrees\      Mỗi worker một git worktree riêng (tên dạng <repo>-01). Script không bao giờ tự xóa.
+   logs\           Log theo ngày: backend, runner, web, supervisor. Log cũ hơn 14 ngày tự xóa khi start.
+   Khi tạo lần đầu, quyền truy cập thư mục này bị giới hạn cho tài khoản Windows của bạn, SYSTEM và Administrators.
+
+2. LẦN ĐẦU
+   a. Mở settings.json, thay mọi giá trị dạng <VIET_HOA> bằng giá trị thật, lưu lại.
+      - Đường dẫn Windows viết bằng dấu / (D:/repos/sh-game) hoặc \\ (D:\\repos\\sh-game).
+      - Repo phải được clone sẵn và KHÔNG nằm trong {{WORKSPACE}}.
+      - Dùng một bản clone RIÊNG cho bridge (ví dụ D:/bridge-repos/sh-game), KHÔNG dùng bản clone bạn code hằng
+        ngày: worker fetch, tạo nhánh và stash trong repo đó. start.cmd cảnh báo nếu repo có thay đổi chưa commit.
+   b. Chạy start.cmd. Nếu settings.json còn lỗi, cửa sổ liệt kê tất cả lỗi; sửa rồi chạy lại.
+   c. Khi thấy khung "claude-bridge đang chạy": mở địa chỉ "Giao diện" (mặc định http://127.0.0.1:4173),
+      dán pairing token, tick "Ghi nhớ trên máy này", bấm Kết nối.
+   d. Nếu đổi ports.bridge khác 8787: lần đầu nhập WebSocket URL mà start.cmd in ra ở màn hình Kết nối.
+
+3. DỪNG
+   Bấm Ctrl+C trong cửa sổ start.cmd và chờ vài giây. Bấm Ctrl+C lần nữa để dừng ngay.
+   Nếu cửa sổ hỏi "Terminate batch job (Y/N)?", gõ Y rồi Enter. Trả lời Y hay N đều an toàn.
+   Ctrl+C lúc worker đang làm dở cũng an toàn: lần start sau, việc dở trong worktree được cất vào git stash
+   (tên "mps-bridge auto-stash <worker> <thời điểm>", xem bằng git -C <worktree> stash list), không bị xóa.
+   Mỗi lúc chỉ một start.cmd / update.cmd chạy trên thư mục này (file khóa data\mps-bridge.lock).
+
+4. CẬP NHẬT
+   Dừng dịch vụ trước (mục 3), rồi chạy update.cmd. Xong thì chạy lại start.cmd.
+   update.cmd từ chối chạy khi dịch vụ còn chạy, hoặc khi app\ có thay đổi chưa commit.
+
+5. LỖI THƯỜNG GẶP
+   - "Cổng ... đang bị chiếm": dịch vụ đang chạy ở cửa sổ khác; đóng nó, hoặc đổi ports trong settings.json.
+   - "Không tìm thấy git": cài Git for Windows (https://git-scm.com/download/win) rồi mở lại cửa sổ.
+   - "Không tìm thấy claude": cài Claude Code, chạy "claude" một lần để đăng nhập, rồi mở lại cửa sổ.
+   - "Claude Code quá cũ": chạy "claude update".
+   - "Không tìm thấy uvx": chạy "winget install astral-sh.uv" rồi mở lại cửa sổ.
+   - "Cần Node.js >= 22": cài Node.js 22 trở lên.
+   - "Chưa build xong": chạy update.cmd, hoặc xem lỗi build ở trên.
+   - "Không chuẩn bị được mcp-atlassian": kiểm tra mạng/proxy; Jira trong Claude có thể lỗi lần đầu.
+   - "git fetch origin ... thất bại": kiểm tra mạng và quyền truy cập repo (thử git fetch trong repo đó).
+   - "Không tìm thấy nhánh origin/...": sửa base_branch của repo trong settings.json.
+   - "... đã tồn tại nhưng không phải worktree của repo ...": xóa thư mục đó trong worktrees\ (nếu không cần) hoặc đổi tên repo.
+   - "Tạo worktree ... thất bại": đọc thông báo git đi kèm; thường do đường dẫn bị khóa hoặc nhánh lỗi.
+   - "Worktree ... còn việc dở: đã cất vào stash": bình thường sau khi dừng giữa chừng; lấy lại bằng git stash list / pop.
+   - "Worktree ... không tự stash được": vào worktree đó xem git status (thường do merge/rebase đang dở), dọn tay.
+     Worker ở worktree bẩn sẽ báo conflict cho tới khi dọn xong. Script không tự xóa gì.
+   - "Repo ... có thay đổi chưa commit": đổi repos[].path sang một bản clone riêng cho bridge (mục 2a).
+   - "Repo ...: .claude/settings.json ... có "allow" hoặc "hooks"": worker nạp settings của repo
+     (--setting-sources project) nên được thêm các quyền/hook đó. Đọc kỹ file trên nhánh base_branch.
+   - "Thư mục làm việc đang được dùng bởi tiến trình ...": đã có start.cmd / update.cmd khác đang chạy; đóng nó.
+     Nếu chắc chắn không còn, xóa data\mps-bridge.lock.
+   - "Không khóa được quyền truy cập ...": chỉ là cảnh báo; đừng chia sẻ thư mục này cho người khác.
+   - "Worktree thừa": slot không còn dùng (giảm workers hoặc đổi tên repo); xóa bằng lệnh git worktree remove được in ra.
+   - "runner từ chối cấu hình sinh ra": lỗi của mps-bridge, báo người bảo trì kèm logs\runner-*.log.
+
+6. MẸO
+   Đừng bấm chuột vào trong cửa sổ start.cmd. Nếu tiêu đề cửa sổ hiện chữ "Select", bấm Esc:
+   khi đang chọn chữ, Windows tạm dừng mọi output của dịch vụ.
+
+7. BẢO MẬT
+   - settings.json và generated\ chứa Jira personal token. logs\ chứa pairing token.
+     KHÔNG gửi các file/thư mục này cho người khác.
+   - Trưởng nhóm nên bật protected branch trên GitLab cho nhánh base_branch của mỗi repo:
+     danh sách lệnh cấm của worker chỉ là lớp bảo vệ phụ, protected branch mới là hàng rào thật.
+   - Worker bị cấm Read/Edit settings.json, generated\, data\ và logs\. Rủi ro còn lại: worker được chạy git
+     (Bash(git:*)), và một số lệnh git đọc được file ngoài repo (ví dụ git diff --no-index, git show <đường dẫn>).
+     Claude Code chặn được các dạng thông thường nhưng không đảm bảo mọi biến thể. Đừng đặt thêm bí mật nào khác
+     trong thư mục này.
+   - Worker nạp .claude/settings.json của repo (quyền allow, hook). Chỉ dùng repo có file này đã được review.
+   - mcp-atlassian chưa được ghim phiên bản: uvx tải bản mới nhất khi cache trống.

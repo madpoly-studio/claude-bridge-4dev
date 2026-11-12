@@ -31,6 +31,7 @@ packages/protocol/   kiểu dữ liệu dùng chung: entity, bus event, MCP tool
 packages/backend/    Auth Gate, Session Manager, Permission Broker, Wake Dispatcher, Jira Reader, Event Log, Task Bus
 packages/runner/     Worker Runner: long-poll bus, spawn claude -p, chuyển tiếp stream, heartbeat
 packages/web/        React + Vite SPA (tĩnh, đặt trên host có SSO)
+scripts/mps-bridge/  cài đặt + khởi chạy trên Windows từ một file settings.json (setup.mjs, cli.mjs init|start|update)
 e2e/                 test tích hợp: bus + runner + claude giả; web client + backend thật
 docs/decisions.md    các lựa chọn cho mục ĐỀ XUẤT / MỞ của system design và chỗ lệch
 ```
@@ -51,6 +52,45 @@ Chi tiết từng gói: [backend](packages/backend/README.md) · [runner](packag
 pnpm install
 pnpm build          # protocol → backend, runner, web
 ```
+
+## Cài nhanh trên Windows (D:\mps-claude-bridge)
+
+Cách dành cho người dùng: chỉ điền **một file** (`settings.json`) rồi chạy `start.cmd`. Mọi cấu hình của các gói
+(`bridge.config.json`, `runner.config.json`, file `.env` Jira, MCP của worker, flow của worker) được sinh tự động.
+
+Cần có sẵn: Node.js ≥ 22, Git for Windows, Claude Code (`claude` trong PATH, đã đăng nhập), uv (`winget install astral-sh.uv`).
+
+```bat
+git clone https://github.com/madpoly-studio/claude-bridge-4dev.git D:\mps-claude-bridge\app
+node D:\mps-claude-bridge\app\scripts\mps-bridge\setup.mjs
+```
+
+`setup.mjs` tạo `D:\mps-claude-bridge` (nếu chưa có), clone hoặc cập nhật `app\` (nhánh `main`), cài thư viện,
+build, rồi tạo `settings.json` mẫu, `start.cmd`, `update.cmd` và `HUONG-DAN.txt`.
+
+| Việc | Cách làm |
+|---|---|
+| Điền cấu hình | Mở `D:\mps-claude-bridge\settings.json`, thay mọi giá trị `<VIET_HOA>` (Jira PAT, project key, repo). Khóa bắt đầu bằng `_` chỉ là hướng dẫn |
+| Chạy | `start.cmd`: kiểm tra settings (liệt kê **mọi** lỗi một lần), kiểm tra công cụ và cổng, sinh `generated\`, tạo worktree cho từng worker, rồi chạy backend + runner + web trong một cửa sổ |
+| Mở giao diện | `http://127.0.0.1:4173` (mặc định), dán pairing token in trong khung "claude-bridge đang chạy" |
+| Dừng | Ctrl+C trong cửa sổ đó. Hỏi `Terminate batch job (Y/N)?` thì gõ Y |
+| Cập nhật | Dừng dịch vụ, rồi `update.cmd` (từ chối nếu dịch vụ còn chạy hoặc `app\` có thay đổi chưa commit) |
+
+Cổng: `ports.bridge` (mặc định 8787) và `ports.web` (mặc định 4173). Giao diện mặc định kết nối `ws://127.0.0.1:8787/ws`;
+đổi `ports.bridge` thì lần đầu nhập WebSocket URL mà `start.cmd` in ra ở màn hình Kết nối.
+
+Mã thoát của `start.cmd` / `update.cmd` / `setup.mjs`: `0` dừng bình thường, `1` dịch vụ dừng bất ngờ hoặc không sẵn sàng
+kịp (xem `logs\`), `2` `settings.json` thiếu hoặc sai, `3` môi trường (thiếu công cụ, cổng bị chiếm, lỗi git/build/worktree),
+`130` Ctrl+C lần hai (dừng ngay).
+
+`generated\` bị xóa và ghi lại ở mỗi lần start: không sửa tay. `settings.json` và `generated\` chứa Jira PAT, `logs\`
+chứa pairing token. Worktree trong `worktrees\` không bao giờ bị script xóa hay reset: việc dở (sau Ctrl+C) được cất vào
+`git stash` ở lần start sau. `repos[].path` nên là một bản clone riêng cho bridge, không phải clone đang code hằng ngày.
+Mỗi lúc chỉ một `start.cmd` / `update.cmd` chạy trên một thư mục làm việc (`data\mps-bridge.lock`).
+
+Danh sách lệnh cấm của worker (`git push --force`, xóa nhánh remote, …) chỉ là lớp bảo vệ phụ: rule của Claude so khớp
+theo tiền tố nên không chặn được mọi biến thể. Trưởng nhóm cần bật **protected branch** trên GitLab cho `base_branch` của
+mỗi repo.
 
 ## Cấu hình
 
@@ -123,7 +163,8 @@ Muốn xem giao diện mà không cần backend: mở `http://localhost:5173/?de
 ```bash
 pnpm typecheck
 pnpm test        # unit test: backend 80, runner 20, web 65
-pnpm test:e2e    # bus + runner thật + claude giả; web client + backend thật
+pnpm test:e2e    # bus + runner thật + claude giả; web client + backend thật; config sinh bởi mps-bridge
+pnpm test:scripts  # unit test của scripts/mps-bridge (node:test, không cần build)
 ```
 
 Không test nào gọi Claude thật hay Jira thật: dùng driver Claude giả, `fake-claude.mjs` và server Jira giả.

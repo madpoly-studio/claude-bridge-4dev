@@ -12,6 +12,7 @@
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
     "test:e2e": "vitest run --config e2e/vitest.config.ts",
+    "test:scripts": "node --test scripts/mps-bridge/test/",
     "dev:backend": "tsx watch packages/backend/src/index.ts",
     "dev:runner": "tsx packages/runner/src/index.ts",
     "dev:web": "pnpm --filter @claude-bridge/web dev",

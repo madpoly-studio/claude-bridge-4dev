@@ -1,0 +1,42 @@
+{
+  "_huong_dan": [
+    "Đây là file DUY NHẤT bạn cần điền. Điền xong thì chạy start.cmd.",
+    "Thay mọi giá trị dạng <VIET_HOA> bằng giá trị thật. start.cmd sẽ liệt kê chỗ nào còn sót.",
+    "Đường dẫn Windows viết bằng dấu / (D:/repos/sh-game) hoặc \\\\ (D:\\\\repos\\\\sh-game).",
+    "Khóa bắt đầu bằng _ chỉ là hướng dẫn, xóa hay giữ đều được.",
+    "File này chứa Jira token: KHÔNG gửi file này cho người khác."
+  ],
+  "jira": {
+    "_huong_dan": "url: địa chỉ Jira (đổi nếu khác). personal_token: Jira > ảnh đại diện > Profile > Personal Access Tokens > Create token. ca_bundle: đường dẫn tuyệt đối tới file CA .pem nếu mạng công ty yêu cầu, không cần thì để null.",
+    "url": "https://jira-mps.mto.zing.vn",
+    "personal_token": "<JIRA_PERSONAL_TOKEN>",
+    "ca_bundle": null
+  },
+  "_huong_dan_projects": "Danh sách Jira project key (chữ in hoa, ví dụ \"SH\"). Mỗi project có một orchestrator riêng.",
+  "projects": ["<JIRA_PROJECT_KEY>"],
+  "_huong_dan_repos": "Mỗi repo một mục. Thêm repo thì chép nguyên một khối { ... } và thêm dấu phẩy giữa các khối.",
+  "repos": [
+    {
+      "_huong_dan": "name: tên ngắn (chữ, số, . _ -). path: thư mục repo đã clone sẵn trên máy (có .git), KHÔNG được nằm trong D:/mps-claude-bridge. Dùng một bản clone RIÊNG cho bridge (ví dụ D:/bridge-repos/sh-game), KHÔNG dùng bản clone bạn đang code hằng ngày. project_key: một key trong projects. base_branch: nhánh gốc để tạo nhánh feature và nhận merge request (ví dụ develop hoặc main). workers: số worker chạy song song cho repo này. allowed_bash: lệnh build/test worker được chạy, ví dụ [\"npm test\", \"dotnet build:*\"]; để [] nếu không có.",
+      "name": "<TEN_REPO>",
+      "path": "<DUONG_DAN_REPO>",
+      "project_key": "<JIRA_PROJECT_KEY>",
+      "base_branch": "<NHANH_GOC>",
+      "workers": 1,
+      "allowed_bash": []
+    }
+  ],
+  "models": {
+    "_huong_dan": "Tùy chọn. null = model mặc định của Claude Code. Ví dụ \"sonnet\", \"opus\".",
+    "planner": null,
+    "orchestrator": null,
+    "worker": null
+  },
+  "ports": {
+    "_huong_dan": "Tùy chọn. bridge: cổng backend (mặc định 8787). web: cổng giao diện (mặc định 4173). Đổi bridge khác 8787 thì lần đầu phải nhập WebSocket URL trên màn hình Kết nối (start.cmd in ra).",
+    "bridge": 8787,
+    "web": 4173
+  },
+  "_huong_dan_max_concurrency": "Tùy chọn. Số task chạy cùng lúc tối đa. null = tổng số workers của mọi repo.",
+  "max_concurrency": null
+}
