@@ -6,7 +6,7 @@ Jira (self-host) và GitLab (self-host).
 ```
 Planner (chat, 1 phiên / 1 vấn đề) ──duyệt──► ticket Jira (label "agent")
                                                    │
-Orchestrator (1 / Jira project) ◄── đánh thức ─────┘
+Orchestrator (1 / Jira project) ◄── bạn yêu cầu ───┘  (wake_mode "auto": tự đánh thức)
         │ assign_task (MCP)
         ▼
 Task Bus (SQLite) ◄── HTTP ──► Worker Runner ×M ──spawn──► claude -p trong worktree ──► GitLab MR
@@ -55,8 +55,9 @@ pnpm build          # protocol → backend, runner, web
 
 ## Cài nhanh trên Windows
 
-Cách dành cho người dùng: chỉ điền **một file** (`settings.json`) rồi chạy `start.cmd`. Mọi cấu hình của các gói
-(`bridge.config.json`, `runner.config.json`, file `.env` Jira, MCP của worker, flow của worker) được sinh tự động.
+Cách dành cho người dùng: chỉ điền **một file** (`settings.json`), chạy `prepare.cmd` (tạo worktree) rồi `start.cmd`.
+Mọi cấu hình của các gói (`bridge.config.json`, `runner.config.json`, file `.env` Jira, MCP của worker, flow của worker)
+được sinh tự động.
 
 Cần có sẵn: Node.js ≥ 22, Git for Windows, Claude Code (`claude` trong PATH, đã đăng nhập), uv (`winget install astral-sh.uv`).
 
@@ -67,28 +68,44 @@ node D:\claude-bridge\scripts\mps-bridge\setup.mjs
 
 Clone vào thư mục nào cũng được (`D:\claude-bridge` chỉ là ví dụ); bản clone đó chính là ứng dụng. `setup.mjs` tạo thư
 mục làm việc `ws\` ngay trong bản clone (git bỏ qua nó), cài thư viện, build, rồi tạo `ws\settings.json` mẫu,
-`ws\start.cmd`, `ws\update.cmd` và `ws\HUONG-DAN.txt`. Setup không clone hay pull gì thêm.
+`ws\start.cmd`, `ws\prepare.cmd`, `ws\update.cmd` và `ws\HUONG-DAN.txt`. Setup không clone hay pull gì thêm.
 
 | Việc | Cách làm |
 |---|---|
 | Điền cấu hình | Mở `ws\settings.json`, thay mọi giá trị `<VIET_HOA>` (Jira PAT, project key, repo). Khóa bắt đầu bằng `_` chỉ là hướng dẫn |
-| Chạy | `ws\start.cmd`: kiểm tra settings (liệt kê **mọi** lỗi một lần), kiểm tra công cụ và cổng, sinh `ws\generated\`, tạo worktree cho từng worker, rồi chạy backend + runner + web trong một cửa sổ |
+| Chuẩn bị worktree | `ws\prepare.cmd` (lần đầu): kiểm tra settings, `git fetch origin <base_branch>` rồi `git worktree add` cho từng worker, in ra bước đang làm. Chỉ cần git: không kiểm tra cổng, không build, không cần pairing token. Repo lớn (Unity) có thể mất nhiều phút. Worktree đã có thì bỏ qua |
+| Chạy | `ws\start.cmd`: kiểm tra settings (liệt kê **mọi** lỗi một lần), kiểm tra cổng và công cụ, làm bước chuẩn bị worktree như `prepare.cmd` (bỏ qua worktree đã có), build nếu thiếu, sinh `ws\generated\`, rồi chạy backend + runner + web trong một cửa sổ |
 | Mở giao diện | `http://127.0.0.1:4173` (mặc định), dán pairing token in trong khung "claude-bridge đang chạy" |
 | Dừng | Ctrl+C trong cửa sổ đó. Hỏi `Terminate batch job (Y/N)?` thì gõ Y |
-| Cập nhật | Dừng dịch vụ, rồi `ws\update.cmd`: `git pull --ff-only origin main` trong bản clone, cài thư viện, build. Từ chối nếu dịch vụ còn chạy, hoặc bản clone có thay đổi chưa commit, không ở nhánh `main`, hay không có remote `origin` |
+| Cập nhật | Dừng dịch vụ, rồi `ws\update.cmd`: `git pull --ff-only origin main` trong bản clone, cài thư viện, build, ghi lại các launcher (tạo `prepare.cmd` cho bản cài cũ). Từ chối nếu dịch vụ còn chạy, hoặc bản clone có thay đổi chưa commit, không ở nhánh `main`, hay không có remote `origin` |
 
 Cổng: `ports.bridge` (mặc định 8787) và `ports.web` (mặc định 4173). Giao diện mặc định kết nối `ws://127.0.0.1:8787/ws`;
 đổi `ports.bridge` thì lần đầu nhập WebSocket URL mà `start.cmd` in ra ở màn hình Kết nối.
 
-Mã thoát của `start.cmd` / `update.cmd` / `setup.mjs`: `0` dừng bình thường, `1` dịch vụ dừng bất ngờ hoặc không sẵn sàng
-kịp (xem `logs\`), `2` `settings.json` thiếu hoặc sai, `3` môi trường (thiếu công cụ, cổng bị chiếm, lỗi git/build/worktree),
-`130` Ctrl+C lần hai (dừng ngay).
+Mã thoát của `start.cmd` / `prepare.cmd` / `update.cmd` / `setup.mjs`: `0` dừng bình thường (với `prepare.cmd`: worktree
+đã sẵn sàng), `1` dịch vụ dừng bất ngờ hoặc không sẵn sàng kịp (xem `logs\`), `2` `settings.json` thiếu hoặc sai, `3` môi
+trường (thiếu công cụ, cổng bị chiếm, lỗi git/build/worktree), `130` Ctrl+C lần hai (dừng ngay).
 
 `generated\` bị xóa và ghi lại ở mỗi lần start: không sửa tay. `settings.json` và `generated\` chứa Jira PAT, `logs\`
-chứa pairing token. Worktree của worker không bao giờ bị script xóa hay reset: việc dở (sau Ctrl+C) được cất vào
+chứa pairing token. Worktree đã tạo xong không bao giờ bị script xóa hay reset: việc dở (sau Ctrl+C) được cất vào
 `git stash` ở lần start sau. `repos[].path` nên là một bản clone riêng cho bridge, không phải clone đang code hằng ngày,
-và không được nằm trong bản clone bridge. Mỗi lúc chỉ một `start.cmd` / `update.cmd` chạy trên một thư mục làm việc
-(`data\mps-bridge.lock`).
+và không được nằm trong bản clone bridge. Mỗi lúc chỉ một `start.cmd` / `prepare.cmd` / `update.cmd` chạy trên một thư
+mục làm việc (`data\mps-bridge.lock`).
+
+Thời gian chờ của bước worktree: `git fetch` và mỗi `git worktree add` tối đa **10 phút** (cả `worktree remove`,
+`stash push`, `checkout` trong worktree); `git status` 2 phút; các lệnh chỉ đọc ref/object (`rev-parse`,
+`worktree list`, `show`, `ls-tree`) 30 giây. Hết giờ thì cây tiến trình git bị dừng (`taskkill /T /F`), và script chỉ
+dọn sau khi `taskkill` xong và mọi tiến trình con còn giữ output của git đã thoát. Worktree **tạo dở** được tự xóa,
+không bao giờ bị stash:
+
+- `git worktree add` lỗi hoặc quá giờ: xóa ngay đăng ký worktree đó (`git worktree remove --force --force`) và thư
+  mục mà chính lần chạy này vừa tạo, rồi báo lỗi gốc.
+- Lần chạy trước bị dừng giữa lúc tạo (Ctrl+C, đóng cửa sổ, quá giờ ở bản cũ): git để lại khóa `initializing`
+  (`git worktree list --porcelain` hiện `locked initializing`). Slot nào còn khóa này mà HEAD chưa đổi kể từ lúc tạo
+  (reflog của HEAD chỉ có đúng mục của `worktree add`) thì được xóa và tạo lại, kèm cảnh báo. Nếu đã có
+  checkout/commit sau đó (bản cũ có thể đã giao worktree dở này cho worker) thì chỉ mở khóa, rồi xử lý như worktree
+  bình thường (việc dở được stash, không xóa). Worktree khóa vì lý do khác, worktree không phải slot, và file có sẵn
+  ở đường dẫn slot không bị đụng tới. Lệnh git của script chạy với `LC_ALL=C` để lý do khóa không bị dịch.
 
 Lưu ý khi chạy từ bản clone:
 
@@ -122,7 +139,7 @@ cũ vẫn chạy được (nó cập nhật `app\` rồi ghi lại launcher), nh
    trình duyệt thì chép thêm `data\pairing-token.txt`; không chép cơ sở dữ liệu.
 4. Việc dở đã được auto-stash nằm trong stash chung của từng repo (`git -C <repo> stash list`), không mất khi xóa worktree.
 5. Xóa worktree cũ: `git -C <repo> worktree remove "D:\mps-claude-bridge\worktrees\<repo>-01"` (hoặc xóa thư mục rồi
-   `git -C <repo> worktree prune`). `start.cmd` mới cũng liệt kê chúng.
+   `git -C <repo> worktree prune`). `start.cmd` / `prepare.cmd` mới cũng liệt kê chúng.
 6. Xóa thư mục `D:\mps-claude-bridge`.
 
 Danh sách lệnh cấm của worker (`git push --force`, xóa nhánh remote, …) chỉ là lớp bảo vệ phụ: rule của Claude so khớp
@@ -146,9 +163,10 @@ cp bridge.config.example.json bridge.config.json
 | `planner.mcp_servers`, `planner.allowed_tools` | MCP server Jira cho planner và các tool đọc được phép. Tool tạo issue khớp `jira_create_tool_pattern` luôn qua gate duyệt |
 | `orchestrators.<KEY>` | `cwd` riêng cho orchestrator của project, MCP Jira (đọc), allowlist |
 | `max_concurrency`, `task_timeout_minutes`, `orch_tick_minutes`, `jira_poll_seconds` | Giá trị mặc định theo system design mục 13 |
+| `wake_mode` | `"manual"` (mặc định): orchestrator chỉ làm khi bạn nhắn yêu cầu; bridge chỉ báo cho nó kết quả `task.completed` / `task.failed`. `"auto"`: tự đánh thức khi worker đăng ký, có ticket label `agent` mới và mỗi `orch_tick_minutes` (hành vi cũ) |
 
 Biến môi trường ghi đè: `BRIDGE_PORT`, `MAX_CONCURRENCY`, `TASK_TIMEOUT_MINUTES`, `ORCH_TICK_MINUTES`,
-`JIRA_POLL_SECONDS`, `ALLOWED_ORIGINS`, `CLAUDE_AUTH_MODE`, `BRIDGE_PAIRING_TOKEN`, `RUNNER_BOOTSTRAP_TOKEN`, `LOG_LEVEL`.
+`WAKE_MODE`, `JIRA_POLL_SECONDS`, `ALLOWED_ORIGINS`, `CLAUDE_AUTH_MODE`, `BRIDGE_PAIRING_TOKEN`, `RUNNER_BOOTSTRAP_TOKEN`, `LOG_LEVEL`.
 Đường dẫn khác cho file cấu hình: `BRIDGE_CONFIG=<path>`.
 
 ### 2. Runner: `runner.config.json` ở thư mục gốc repo
@@ -188,8 +206,11 @@ Muốn xem giao diện mà không cần backend: mở `http://localhost:5173/?de
 1. **Planner** → *Phiên mới* → chọn repo → mô tả vấn đề. Khi planner muốn tạo ticket, card bản nháp hiện ra:
    **Duyệt và tạo ticket**, **Sửa** (chỉnh tiêu đề, mô tả, label rồi tạo) hoặc **Hủy** (kèm lý do, planner tiếp tục
    hội thoại).
-2. Ticket có label `agent` được tạo thì backend phát `ticket.created` và **đánh thức orchestrator** (gộp theo cửa sổ
-   10 giây). Orchestrator cũng được đánh thức định kỳ mỗi `orch_tick_minutes` để bắt ticket tạo tay trên Jira.
+2. Khi bridge khởi động, cột **Orchestrator** chỉ hiện thông tin bridge và lời chào (không tốn turn Claude); orchestrator
+   **không tự lấy ticket**. Nhắn yêu cầu cho nó, ví dụ "Liệt kê các ticket label agent đang mở" hoặc "Giao SH-123 cho
+   worker rảnh". Task xong/lỗi thì bridge báo cho orchestrator để nó báo lại bạn; nó chỉ giao tiếp khi đó là phần việc
+   bạn đã yêu cầu và không tự retry task lỗi. (Với `wake_mode: "auto"`: `ticket.created` và tick mỗi
+   `orch_tick_minutes` tự đánh thức orchestrator như trước.)
 3. **Orchestrator** đọc Jira và trạng thái worker, giao task qua `assign_task`.
 4. **Runner** nhận task, chạy `claude -p` trong worktree. Tab **Log → Workers** hiện thanh 5 phase; bấm vào worker để
    xem **Chi tiết task** (chỉ xem).

@@ -57,6 +57,13 @@ export const StreamItemView = memo(function StreamItemView({ item, speaker, show
       );
     case "notice":
       return <div className={cx(styles.notice, item.tone === "warn" && styles.noticeWarn)}>{item.text}</div>;
+    case "welcome":
+      return (
+        <div className={styles.welcome} role="note" aria-label="Thông báo của bridge">
+          <span className={styles.welcomeTitle}>bridge</span>
+          <MessageText text={item.text} />
+        </div>
+      );
     case "raw":
       return <div className={styles.raw}>{item.text}</div>;
     default:

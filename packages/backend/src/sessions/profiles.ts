@@ -1,6 +1,6 @@
 // Options Agent SDK cho từng role (mục 5.2): cwd chỉ từ cấu hình, allowlist tool, MCP server, system prompt.
 import type { CanUseTool, McpServerConfig, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
-import { BUS_MCP_SERVER_NAME, ORCHESTRATOR_TOOLS, busToolFullName } from "@claude-bridge/protocol";
+import { BUS_MCP_SERVER_NAME, ORCHESTRATOR_TOOLS, type WakeMode, busToolFullName } from "@claude-bridge/protocol";
 import type { ClaudeSessionOptions } from "../claude/driver.js";
 import { RepoPathGuard, SECRET_READ_DENY_RULES } from "../claude/repoPathGuard.js";
 import { ToolPolicy, policyDenyMessage, policyHook } from "../claude/toolPolicy.js";
@@ -20,14 +20,35 @@ export const PLANNER_PROMPT_APPEND = [
   "Nếu yêu cầu tạo issue bị từ chối, đọc lý do, hỏi lại người dùng và chỉnh bản nháp; không thử lại khi chưa thống nhất.",
 ].join("\n");
 
-export const ORCHESTRATOR_PROMPT_APPEND = [
+const ORCHESTRATOR_ROLE = [
   "Bạn là orchestrator của claude-bridge cho Jira project {PROJECT}. Bạn không viết code, chỉ điều phối.",
   `Chỉ giao việc bằng tool ${busToolFullName("assign_task")}; không có cách giao việc nào khác.`,
-  `Mỗi lần khởi động, sau khi context bị compact, hoặc khi không chắc, dựng lại toàn cảnh từ Jira cùng ` +
-    `${busToolFullName("list_workers")} và ${busToolFullName("list_tasks")}; không dựa vào trí nhớ hội thoại.`,
+];
+const BUS_PICTURE = `Jira cùng ${busToolFullName("list_workers")} và ${busToolFullName("list_tasks")}`;
+
+/** wake_mode `auto`: bridge đánh thức theo mọi trigger, orchestrator tự quyết định giao việc. */
+export const ORCHESTRATOR_PROMPT_AUTO = [
+  ...ORCHESTRATOR_ROLE,
+  `Mỗi lần khởi động, sau khi context bị compact, hoặc khi không chắc, dựng lại toàn cảnh từ ${BUS_PICTURE}; ` +
+    "không dựa vào trí nhớ hội thoại.",
   "Turn bắt đầu bằng [bridge-event] là turn hệ thống của bridge: chỉ chứa định danh (type, ticket_key, task_id, " +
     "worker_id, category). Tự đọc Jira và bus để lấy nội dung, rồi quyết định có giao việc hay không.",
 ].join("\n");
+
+/** wake_mode `manual`: chỉ làm khi người dùng yêu cầu; bridge chỉ báo kết quả task. */
+export const ORCHESTRATOR_PROMPT_MANUAL = [
+  ...ORCHESTRATOR_ROLE,
+  "Chế độ thủ công: chỉ giao việc khi người dùng yêu cầu trong turn của họ; không bao giờ tự chọn hay tự giao ticket.",
+  `Không đọc Jira khi vừa khởi động. Trước khi thực hiện một yêu cầu (hoặc sau khi context bị compact, khi không chắc), ` +
+    `dựng lại toàn cảnh từ ${BUS_PICTURE}; không dựa vào trí nhớ hội thoại.`,
+  "Turn bắt đầu bằng [bridge-event] là turn hệ thống của bridge, chỉ báo kết quả task (task.completed / task.failed, " +
+    "chỉ có định danh). Đọc kết quả qua bus / Jira và báo ngắn gọn cho người dùng; chỉ giao việc tiếp theo nếu đó là một phần " +
+    "yêu cầu rõ ràng của người dùng (ví dụ \"làm lần lượt {PROJECT}-1, {PROJECT}-2\"). Không giao lại task lỗi khi chưa hỏi người dùng.",
+].join("\n");
+
+export function orchestratorPromptAppend(mode: WakeMode, projectKey: string): string {
+  return (mode === "auto" ? ORCHESTRATOR_PROMPT_AUTO : ORCHESTRATOR_PROMPT_MANUAL).replaceAll("{PROJECT}", projectKey);
+}
 
 export interface ProfileDeps {
   config: BridgeConfig;
@@ -130,7 +151,7 @@ export class SessionProfiles {
       allowedTools: policy.preapprovedMcpTools(forbidden),
       hooks: { PreToolUse: [policyHook({ policy, forbidden })] },
       canUseTool,
-      systemPrompt: promptAppend(ORCHESTRATOR_PROMPT_APPEND.replace("{PROJECT}", projectKey), cfg.system_prompt_append),
+      systemPrompt: promptAppend(orchestratorPromptAppend(this.deps.config.wake_mode, projectKey), cfg.system_prompt_append),
     };
   }
 

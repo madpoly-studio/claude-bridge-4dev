@@ -8,6 +8,7 @@ import {
   dotenvQuote,
   permissionPath,
   workspaceSecretRules,
+  worktreeSpecs,
 } from "../lib/generate.mjs";
 import { workspacePaths } from "../lib/paths.mjs";
 import { validateSettings } from "../lib/settings.mjs";
@@ -106,6 +107,46 @@ describe("buildWorkspaceFiles", () => {
 
   it("is deterministic", () => {
     assert.deepEqual(build(), build());
+  });
+});
+
+describe("worktreeSpecs", () => {
+  /** @param {(raw: any) => void} mutate */
+  function settingsWith(mutate) {
+    const raw = validRaw();
+    mutate(raw);
+    const r = validateSettings(raw, { workspace: WORKSPACE, appRoot: APP_ROOT_FAKE, fs: fakeFs() });
+    assert.deepEqual(r.errors, []);
+    return /** @type {any} */ (r.settings);
+  }
+
+  it("one spec per slot, repo by repo, without a token", () => {
+    const settings = settingsWith((r) => {
+      r.repos.push({ name: "sh-tools", path: REPO_B, project_key: "SH", base_branch: "main", workers: 1 });
+    });
+    assert.deepEqual(worktreeSpecs(settings, paths), [
+      { repo: "sh-game", repoPath: settings.repos[0].path, wtPath: path.join(paths.worktrees, "sh-game-01"), base: "develop", workerId: "w-sh-game-01" },
+      { repo: "sh-game", repoPath: settings.repos[0].path, wtPath: path.join(paths.worktrees, "sh-game-02"), base: "develop", workerId: "w-sh-game-02" },
+      { repo: "sh-tools", repoPath: REPO_B, wtPath: path.join(paths.worktrees, "sh-tools-01"), base: "main", workerId: "w-sh-tools-01" },
+    ]);
+  });
+
+  it("is what the runner config's slots are built from", () => {
+    const settings = settingsWith((r) => { r.repos[0].workers = 3; });
+    const specs = worktreeSpecs(settings, paths);
+    const files = buildWorkspaceFiles(settings, paths, TOKEN);
+    assert.deepEqual(files.worktrees, specs);
+    const slots = /** @type {any} */ (files.runnerConfig).slots;
+    assert.deepEqual(
+      slots.map((s) => [s.worker_id, s.repo, s.worktree_path]),
+      specs.map((s) => [s.workerId, s.repo, s.wtPath]),
+    );
+  });
+
+  it("follows the effective worktrees root", () => {
+    const moved = { ...paths, worktrees: path.join(path.parse(WORKSPACE).root, "wt") };
+    const specs = worktreeSpecs(settingsWith(() => {}), moved);
+    assert.deepEqual(specs.map((s) => s.wtPath), [path.join(moved.worktrees, "sh-game-01"), path.join(moved.worktrees, "sh-game-02")]);
   });
 });
 

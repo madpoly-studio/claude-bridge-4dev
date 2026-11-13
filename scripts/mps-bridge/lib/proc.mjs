@@ -12,6 +12,7 @@ export const BRIDGE_ENV_OVERRIDES = Object.freeze([
   "MAX_CONCURRENCY",
   "TASK_TIMEOUT_MINUTES",
   "ORCH_TICK_MINUTES",
+  "WAKE_MODE",
   "JIRA_POLL_SECONDS",
   "CLAUDE_AUTH_MODE",
   "BRIDGE_PAIRING_TOKEN",
@@ -104,7 +105,8 @@ export function buildShellCommand(resolved, args) {
  * @property {string} [cwd]
  * @property {NodeJS.ProcessEnv} [env]
  * @property {"inherit" | "pipe"} [stdio] default "pipe"
- * @property {number} [timeoutMs] on timeout the process tree is killed and `timedOut` is true
+ * @property {number} [timeoutMs] on timeout the process tree is killed and `timedOut` is true; the result arrives only
+ *   after the kill has finished
  */
 
 /**
@@ -149,6 +151,8 @@ export function run(cmd, args, opts = {}) {
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    /** @type {Promise<void>} */
+    let killed = Promise.resolve();
     child.stdout?.setEncoding("utf8").on("data", (s) => { stdout += s; });
     child.stderr?.setEncoding("utf8").on("data", (s) => { stderr += s; });
     const timer = opts.timeoutMs === undefined
@@ -156,7 +160,7 @@ export function run(cmd, args, opts = {}) {
       : setTimeout(() => {
         timedOut = true;
         if (child.pid !== undefined) {
-          void killTree(child.pid);
+          killed = killTree(child.pid);
         }
       }, opts.timeoutMs);
     child.on("error", (err) => {
@@ -169,7 +173,11 @@ export function run(cmd, args, opts = {}) {
       if (timer) {
         clearTimeout(timer);
       }
-      resolve({ code, stdout, stderr, timedOut });
+      // A timed-out result is only handed back once the tree kill has finished: "close" can fire as soon as the
+      // direct child is gone while taskkill /T is still ending its descendants (git worktree add → git reset → filters),
+      // and a caller that cleans up after a timeout must not race them. Grandchildren that inherited the pipes keep
+      // "close" from firing until they are gone too (on POSIX, where only the direct child is killed, that is the wait).
+      void killed.then(() => resolve({ code, stdout, stderr, timedOut }));
     });
   });
 }

@@ -62,8 +62,23 @@ export interface SessionEventRecord {
   task_id: string | null;
   ts: string;
   origin: SessionEventOrigin;
-  /** Message SDK / stream-json thô, hoặc `{type:"user_text", text}` cho turn của người dùng/hệ thống. */
+  /**
+   * Message SDK / stream-json thô, `{type:"user_text", text}` cho turn của người dùng/hệ thống, hoặc event do bridge
+   * ghi (origin system, không phải turn gửi cho Claude): `BridgeNoticeEvent`, `BridgeWelcomeEvent`.
+   */
   event: unknown;
+}
+
+/** Thông báo của bridge về process Claude (không start được, chết, không resume được). */
+export interface BridgeNoticeEvent {
+  type: "bridge_notice";
+  message: string;
+}
+
+/** Lời chào khi backend khởi động, ghi vào luồng orchestrator; `text` theo định dạng văn bản agent (đoạn, `code`). */
+export interface BridgeWelcomeEvent {
+  type: "bridge_welcome";
+  text: string;
 }
 
 export interface ServerPayloads {

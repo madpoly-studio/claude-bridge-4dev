@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import type { Session } from "@claude-bridge/protocol";
+import { ChatStream } from "../components/chat/ChatStream";
 import { SessionLog } from "../components/task/SessionLog";
 import { LiveBridgeService } from "../services/live-bridge-service";
 import { initialState, mergeRecords, reducer, streamKeyForSession, streamKeyForTask } from "../state/reducer";
@@ -55,6 +56,25 @@ describe("reducer: luồng bị cắt và bỏ luồng", () => {
     const next = reducer(s, { type: "local/drop-streams", keys: [streamKeyForSession("a"), "không-có"] });
     expect(Object.keys(next.streams)).toEqual([streamKeyForSession("b")]);
     expect(reducer(next, { type: "local/drop-streams", keys: ["không-có"] })).toBe(next);
+  });
+});
+
+describe("ChatStream: event của bridge", () => {
+  afterEach(cleanup);
+  it("lời chào hiện thành card bridge (đoạn + `code`), notice hiện thành dòng cảnh báo", () => {
+    const records = [
+      record(1, { type: "bridge_welcome", text: "Bridge đã khởi động · project `SH`.\n\nVí dụ yêu cầu:\n- Tình hình các worker?" }, { origin: "system" }),
+      record(2, { type: "bridge_notice", message: "Claude process exited" }, { origin: "system" }),
+    ];
+    render(
+      <ChatStream records={records} loaded speaker="orchestrator" options={{ collapseReadOnly: false }} emptyText="trống" ariaLabel="luồng" />,
+    );
+    const card = screen.getByRole("note", { name: "Thông báo của bridge" });
+    expect(card.querySelectorAll("p")).toHaveLength(2);
+    expect(card.querySelector("code")?.textContent).toBe("SH");
+    expect(card.textContent).toContain("- Tình hình các worker?");
+    expect(screen.getByText("Claude process exited")).toBeTruthy();
+    expect(screen.queryByText(/bridge_notice/)).toBeNull();
   });
 });
 

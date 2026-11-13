@@ -37,6 +37,8 @@ export type StreamItem =
   | { kind: "system-turns"; key: string; ts: string; turns: SystemTurn[] }
   | { kind: "wake-warning"; key: string; ts: string; event: WakeEvent }
   | { kind: "notice"; key: string; ts: string; tone: "dim" | "warn"; text: string }
+  /** Lời chào của bridge khi backend khởi động (`bridge_welcome`), không phải turn Claude. */
+  | { kind: "welcome"; key: string; ts: string; text: string }
   | { kind: "raw"; key: string; ts: string; text: string };
 
 export interface BuildOptions {
@@ -173,6 +175,18 @@ function isSystemTurn(rec: SessionEventRecord, text: string): boolean {
   return rec.origin === "system" || text.startsWith(BRIDGE_EVENT_MARKER);
 }
 
+/**
+ * ts của turn hệ thống gần nhất (lần bridge đánh thức orchestrator). Chỉ tính turn thật gửi cho Claude (`user_text`
+ * origin system); lời chào / thông báo của bridge cũng có origin system nhưng không phải lần đánh thức.
+ */
+export function lastSystemTurnTs(records: readonly SessionEventRecord[]): string | null {
+  for (let i = records.length - 1; i >= 0; i--) {
+    const rec = records[i]!;
+    if (rec.origin === "system" && isObj(rec.event) && rec.event.type === "user_text") return rec.ts;
+  }
+  return null;
+}
+
 // ------------------------------------------------------------------ build
 
 type RawItem = StreamItem | { kind: "system-turn"; key: string; ts: string; turn: SystemTurn };
@@ -281,6 +295,16 @@ function rawItemsForRecord(rec: SessionEventRecord, results: Map<string, ToolRes
 
     case "stream_event":
       return [];
+
+    case "bridge_welcome": {
+      const text = str(ev.text) ?? "";
+      if (!text.trim()) return [{ kind: "raw", key: k(0), ts, text: `bridge_welcome: ${compactJson(ev, 140)}` }];
+      return [{ kind: "welcome", key: k(0), ts, text }];
+    }
+
+    case "bridge_notice":
+      // Bridge chỉ ghi notice khi process Claude gặp sự cố (không start được, chết, không resume được).
+      return [{ kind: "notice", key: k(0), ts, tone: "warn", text: str(ev.message) ?? compactJson(ev, 140) }];
 
     default:
       return [{ kind: "raw", key: k(0), ts, text: `${type || "?"}: ${compactJson(ev, 140)}` }];
@@ -443,6 +467,10 @@ export function buildLogRows(records: SessionEventRecord[]): LogRow[] {
       } else if (type === "rate_limit_event") {
         const info = isObj(ev.rate_limit_info) ? ev.rate_limit_info : ev;
         rows.push({ key: k(0), ts: rec.ts, source: "rate", detail: str(info.status) ?? compactJson(info, 80), tone: "warn" });
+      } else if (type === "bridge_notice") {
+        rows.push({ key: k(0), ts: rec.ts, source: "bridge", detail: str(ev.message) ?? compactJson(ev, 140), tone: "warn" });
+      } else if (type === "bridge_welcome") {
+        rows.push({ key: k(0), ts: rec.ts, source: "bridge", detail: truncate(str(ev.text) ?? "", LOG_TEXT_MAX), tone: "dim" });
       } else if (type === "user" || type === "stream_event") {
         // tool_result đã gắn vào dòng tool.
       } else {

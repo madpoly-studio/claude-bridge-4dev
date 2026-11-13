@@ -199,42 +199,66 @@ function buildBridgeConfig(settings, paths, pairingToken) {
 }
 
 /**
+ * One worktree per worker slot, in slot order. The single source of the slot list: the runner config is built from
+ * it, and `prepare` uses it alone (no token, nothing generated).
+ * @param {Settings} settings validated settings
+ * @param {WorkspacePaths} paths effective paths (paths.worktrees is the worktrees root)
+ * @returns {WorktreeSpec[]}
+ */
+export function worktreeSpecs(settings, paths) {
+  /** @type {WorktreeSpec[]} */
+  const specs = [];
+  for (const repo of settings.repos) {
+    for (let n = 1; n <= repo.workers; n++) {
+      specs.push({
+        repo: repo.name,
+        repoPath: repo.path,
+        wtPath: worktreePath(paths, repo.name, n),
+        base: repo.base_branch,
+        workerId: workerId(repo.name, n),
+      });
+    }
+  }
+  return specs;
+}
+
+/**
  * @param {Settings} settings
  * @param {WorkspacePaths} paths
  * @param {string[]} appSecretFiles
  * @returns {{ runnerConfig: RunnerConfigJson, worktrees: WorktreeSpec[] }}
  */
 function buildRunnerConfig(settings, paths, appSecretFiles) {
-  const slots = [];
-  /** @type {WorktreeSpec[]} */
-  const worktrees = [];
   const disallowed = [...WORKER_DISALLOWED_TOOLS, ...workspaceSecretRules(paths, appSecretFiles)];
+  /** @type {Map<string, { allowed: string[], extraArgs: string[] }>} */
+  const perRepo = new Map();
   for (const repo of settings.repos) {
-    const allowed = [...new Set([...WORKER_BASE_TOOLS, ...repo.allowed_bash.map(bashRule), ...WORKER_JIRA_TOOLS])];
-    const extraArgs = [
-      "--append-system-prompt-file",
-      path.join(paths.generatedFlow, `${repo.name}.md`),
-      "--setting-sources",
-      "project",
-      ...(settings.models.worker === null ? [] : ["--model", settings.models.worker]),
-    ];
-    for (let n = 1; n <= repo.workers; n++) {
-      const id = workerId(repo.name, n);
-      const wtPath = worktreePath(paths, repo.name, n);
-      worktrees.push({ repo: repo.name, repoPath: repo.path, wtPath, base: repo.base_branch, workerId: id });
-      slots.push({
-        worker_id: id,
-        repo: repo.name,
-        worktree_path: wtPath,
-        allowed_tools: [...allowed],
-        disallowed_tools: [...disallowed],
-        extra_args: [...extraArgs],
-        mcp_config_files: [paths.workerMcp],
-        env: {},
-        permission_mode: WORKER_PERMISSION_MODE,
-      });
-    }
+    perRepo.set(repo.name, {
+      allowed: [...new Set([...WORKER_BASE_TOOLS, ...repo.allowed_bash.map(bashRule), ...WORKER_JIRA_TOOLS])],
+      extraArgs: [
+        "--append-system-prompt-file",
+        path.join(paths.generatedFlow, `${repo.name}.md`),
+        "--setting-sources",
+        "project",
+        ...(settings.models.worker === null ? [] : ["--model", settings.models.worker]),
+      ],
+    });
   }
+  const worktrees = worktreeSpecs(settings, paths);
+  const slots = worktrees.map((spec) => {
+    const { allowed, extraArgs } = /** @type {{ allowed: string[], extraArgs: string[] }} */ (perRepo.get(spec.repo));
+    return {
+      worker_id: spec.workerId,
+      repo: spec.repo,
+      worktree_path: spec.wtPath,
+      allowed_tools: [...allowed],
+      disallowed_tools: [...disallowed],
+      extra_args: [...extraArgs],
+      mcp_config_files: [paths.workerMcp],
+      env: {},
+      permission_mode: WORKER_PERMISSION_MODE,
+    };
+  });
   return {
     runnerConfig: {
       bus_url: `http://${LOOPBACK}:${settings.ports.bridge}`,

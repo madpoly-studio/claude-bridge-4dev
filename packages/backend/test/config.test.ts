@@ -68,6 +68,16 @@ describe("config", () => {
     expect(() => loadConfig({ CLAUDE_AUTH_MODE: "magic" }, join(dir, "nowhere"))).toThrow(ConfigError);
   });
 
+  it("wake_mode: manual by default, auto from the file or WAKE_MODE (env wins), anything else rejected", () => {
+    expect(loadConfig({}, dir).wake_mode).toBe("manual");
+    expect(parseConfig({ wake_mode: "auto" }, dir).wake_mode).toBe("auto");
+    writeFileSync(join(dir, "bridge.config.json"), JSON.stringify({ wake_mode: "auto" }));
+    expect(loadConfig({}, dir).wake_mode).toBe("auto");
+    expect(loadConfig({ WAKE_MODE: "manual" }, dir).wake_mode).toBe("manual");
+    expect(() => parseConfig({ wake_mode: "sometimes" }, dir)).toThrow(/wake_mode/);
+    expect(() => loadConfig({ WAKE_MODE: "always" }, dir)).toThrow(ConfigError);
+  });
+
   it("bridge.config.example.json at the repo root is valid", () => {
     const example = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "bridge.config.example.json");
     const cfg = loadConfig({ BRIDGE_CONFIG: example }, dir);

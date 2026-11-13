@@ -133,7 +133,7 @@ describe("L3: wake events after a failed flush", () => {
       onRestarted: () => () => undefined,
       onHealthChanged: () => () => undefined,
     };
-    const wake = new WakeDispatcher({ eventLog: {} as EventLog, target, timers, debounceMs: 10_000, tickMs: 600_000, log: silentLog });
+    const wake = new WakeDispatcher({ eventLog: {} as EventLog, target, timers, debounceMs: 10_000, tickMs: 600_000, mode: "auto", log: silentLog });
 
     wake.enqueue("SH", { type: "tick" });
     timers.advance(10_000);

@@ -1,7 +1,14 @@
 // Session Manager (mục 5.2): vòng đời session Claude do bridge spawn — tạo, resume lười theo claude_session_id,
 // ghi MỌI event vào session_events trước khi đẩy ra WS, cờ busy theo turn, interrupt, close.
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { Session, SessionEventOrigin, SessionRole, SessionState } from "@claude-bridge/protocol";
+import type {
+  BridgeNoticeEvent,
+  BridgeWelcomeEvent,
+  Session,
+  SessionEventOrigin,
+  SessionRole,
+  SessionState,
+} from "@claude-bridge/protocol";
 import type { ClaudeDriver, ClaudeSessionHandle, ClaudeSessionOptions } from "../claude/driver.js";
 import type { RepoConfig } from "../config.js";
 import type { EventLog, SessionHistory } from "../events/eventLog.js";
@@ -211,6 +218,13 @@ export class SessionManager {
     return this.publish(this.deps.store.require(sessionId));
   }
 
+  /** Ghi lời chào của bridge vào luồng session (origin system). Không gửi gì cho Claude, không đổi busy / state. */
+  recordWelcome(sessionId: string, text: string): void {
+    this.require(sessionId);
+    const event: BridgeWelcomeEvent = { type: "bridge_welcome", text };
+    this.deps.eventLog.appendSessionEvent({ session_id: sessionId, origin: "system", event });
+  }
+
   /** false nếu session không có process đang sống. */
   async interrupt(sessionId: string): Promise<boolean> {
     this.require(sessionId);
@@ -335,7 +349,8 @@ export class SessionManager {
   }
 
   private recordNotice(sessionId: string, message: string): void {
-    this.deps.eventLog.appendSessionEvent({ session_id: sessionId, origin: "system", event: { type: "bridge_notice", message } });
+    const event: BridgeNoticeEvent = { type: "bridge_notice", message };
+    this.deps.eventLog.appendSessionEvent({ session_id: sessionId, origin: "system", event });
   }
 
   private toSession(row: SessionRow): Session {

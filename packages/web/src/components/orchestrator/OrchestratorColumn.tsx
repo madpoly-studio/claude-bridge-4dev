@@ -3,6 +3,7 @@ import { useBridgeActions, useBridgeState } from "../../hooks/bridge-context";
 import { cx } from "../../lib/cx";
 import { formatHourMinute } from "../../lib/format";
 import { orchestratorSession, sessionStream } from "../../state/selectors";
+import { lastSystemTurnTs } from "../../state/stream";
 import type { BuildOptions } from "../../state/stream";
 import { ChatInput } from "../chat/ChatInput";
 import { ChatStream } from "../chat/ChatStream";
@@ -11,14 +12,6 @@ import columnStyles from "../common/column.module.css";
 import ui from "../common/ui.module.css";
 
 const STREAM_OPTIONS: BuildOptions = { collapseReadOnly: false };
-
-/** ts của turn hệ thống gần nhất (lần bridge đánh thức orchestrator). */
-function lastSystemTurnTs(records: { origin: string; ts: string }[]): string | null {
-  for (let i = records.length - 1; i >= 0; i--) {
-    if (records[i]!.origin === "system") return records[i]!.ts;
-  }
-  return null;
-}
 
 export function OrchestratorColumn() {
   const state = useBridgeState();
@@ -45,7 +38,7 @@ export function OrchestratorColumn() {
         <h2 className={columnStyles.title}>Orchestrator</h2>
         {project && <span className={cx(ui.tag, ui.mono)}>project {project}</span>}
         <span className={columnStyles.spacer} />
-        {lastWake && <span className={columnStyles.meta}>Lần quét gần nhất {formatHourMinute(lastWake)}</span>}
+        {lastWake && <span className={columnStyles.meta}>Bridge báo gần nhất {formatHourMinute(lastWake)}</span>}
       </div>
 
       {session ? (

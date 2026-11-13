@@ -95,7 +95,8 @@ async function main() {
     console.log("");
     console.log("Cài đặt xong. Các bước tiếp theo:");
     console.log(`  1. Mở ${p.settings} và điền mọi chỗ <...> (Jira token, project, repo).`);
-    console.log(`  2. Chạy ${p.startCmd}.`);
+    console.log(`  2. Chạy ${p.prepareCmd} (tạo worktree cho worker; repo lớn có thể mất nhiều phút).`);
+    console.log(`  3. Chạy ${p.startCmd}.`);
     console.log(`  Hướng dẫn chi tiết: ${p.guide}`);
     return EXIT.OK;
   } catch (err) {

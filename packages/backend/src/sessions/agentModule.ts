@@ -19,6 +19,7 @@ import { SessionProfiles } from "./profiles.js";
 import { ProjectSelection } from "./projectSelection.js";
 import { SessionManager } from "./sessionManager.js";
 import { SessionStore } from "./sessionStore.js";
+import { WelcomeAnnouncer } from "./welcome.js";
 import { registerSessionHandlers } from "./wsHandlers.js";
 
 export interface AgentModuleDeps {
@@ -77,8 +78,10 @@ export function createAgentModule(deps: AgentModuleDeps): AgentModule {
     timers,
     debounceMs: config.wake_debounce_seconds * 1000,
     tickMs: config.orch_tick_minutes * 60_000,
+    mode: config.wake_mode,
     log,
   });
+  const welcome = new WelcomeAnnouncer({ config, sessions, clock, log });
 
   const unsubscribers: Unsubscribe[] = [
     sessions.onUpdated((s) => hub.broadcast("session.updated", s)),
@@ -115,10 +118,12 @@ export function createAgentModule(deps: AgentModuleDeps): AgentModule {
     profiles,
     start() {
       wake.start();
+      welcome.start();
       if (config.orchestrator_autostart) orchestrators.startAll();
     },
     async close() {
       wake.stop();
+      welcome.stop();
       orchestrators.stop();
       await sessions.shutdown();
       for (const off of unsubscribers) off();

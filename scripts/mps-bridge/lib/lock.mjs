@@ -39,7 +39,7 @@ function readLock(file) {
  * Takes the lock or throws UserError(3). A lock left by a dead process is replaced. The lock is released by the
  * returned function and, as a fallback, when this process exits.
  * @param {string} dataDir
- * @param {string} command "start" | "update" | "setup"
+ * @param {string} command "start" | "prepare" | "update" | "setup"
  * @returns {() => void} release
  */
 export function acquireWorkspaceLock(dataDir, command) {
@@ -71,7 +71,7 @@ export function acquireWorkspaceLock(dataDir, command) {
     if (holder !== null && holder.pid !== process.pid && isProcessAlive(holder.pid)) {
       throw new UserError(
         `Thư mục làm việc đang được dùng bởi tiến trình ${holder.pid} ("${holder.command}", từ ${holder.started}). ` +
-          "Đóng cửa sổ start.cmd / update.cmd đang chạy rồi thử lại. " +
+          "Đóng cửa sổ start.cmd / prepare.cmd / update.cmd đang chạy rồi thử lại. " +
           `Nếu chắc chắn không còn cửa sổ nào chạy, xóa file ${file}.`,
         EXIT.ENVIRONMENT,
       );

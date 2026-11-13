@@ -4,6 +4,7 @@ Mã nguồn bridge: {{APP_ROOT}} (đừng sửa, đừng chạy git clean trong 
 
 1. THƯ MỤC GỒM GÌ
    settings.json   File DUY NHẤT bạn cần điền (Jira, project, repo, cổng, model).
+   prepare.cmd     Chỉ tạo worktree cho worker (git fetch + git worktree add). Chạy một lần trước start.cmd.
    start.cmd       Chạy dịch vụ (backend + runner + giao diện web) trong một cửa sổ.
    update.cmd      Cập nhật claude-bridge lên bản mới nhất.
    HUONG-DAN.txt   File này.
@@ -11,7 +12,8 @@ Mã nguồn bridge: {{APP_ROOT}} (đừng sửa, đừng chạy git clean trong 
    data\           Dữ liệu của dịch vụ, pairing token (data\pairing-token.txt) và file khóa mps-bridge.lock.
    orchestrators\  Thư mục làm việc của orchestrator, mỗi Jira project một thư mục.
    worktrees\      Mỗi worker một git worktree riêng (tên dạng <repo>-01), hoặc thư mục worktrees_dir nếu đặt
-                   trong settings.json. Script không bao giờ tự xóa.
+                   trong settings.json. Script không bao giờ tự xóa worktree đã tạo xong; chỉ xóa worktree bị
+                   tạo dở (xem mục 2b).
    logs\           Log theo ngày: backend, runner, web, supervisor. Log cũ hơn 14 ngày tự xóa khi start.
    Khi tạo lần đầu, quyền truy cập thư mục này bị giới hạn cho tài khoản Windows của bạn, SYSTEM và Administrators
    (không áp dụng cho thư mục worktrees_dir riêng: thư mục đó không chứa bí mật).
@@ -26,20 +28,26 @@ Mã nguồn bridge: {{APP_ROOT}} (đừng sửa, đừng chạy git clean trong 
         ngày: worker fetch, tạo nhánh và stash trong repo đó. start.cmd cảnh báo nếu repo có thay đổi chưa commit.
       - worktrees_dir (tùy chọn): đặt sang một thư mục ngắn (ví dụ D:/wt) nếu repo có đường dẫn file dài (Unity),
         nếu bản clone bridge nằm sâu, hoặc nếu thư mục cha có CLAUDE.md. Mỗi bridge một thư mục riêng.
-   b. Chạy start.cmd. Nếu settings.json còn lỗi, cửa sổ liệt kê tất cả lỗi; sửa rồi chạy lại.
-   c. Khi thấy khung "claude-bridge đang chạy": mở địa chỉ "Giao diện" (mặc định http://127.0.0.1:4173),
+   b. Chạy prepare.cmd: tạo worktree cho từng worker. Repo lớn (Unity) có thể mất nhiều phút: mỗi lần git fetch
+      và mỗi worktree được chờ tối đa 10 phút, cửa sổ in ra bước đang làm. Nếu settings.json còn lỗi, cửa sổ liệt
+      kê tất cả lỗi; sửa rồi chạy lại. Dừng giữa chừng (Ctrl+C, đóng cửa sổ) hay quá giờ đều an toàn: worktree
+      đang tạo dở được tự xóa, ngay lúc đó hoặc ở lần chạy sau, rồi tạo lại.
+   c. Chạy start.cmd. start.cmd cũng tự làm bước b (worktree đã có thì bỏ qua), nên bỏ qua b vẫn được, chỉ là
+      lần start đầu sẽ lâu.
+   d. Khi thấy khung "claude-bridge đang chạy": mở địa chỉ "Giao diện" (mặc định http://127.0.0.1:4173),
       dán pairing token, tick "Ghi nhớ trên máy này", bấm Kết nối.
-   d. Nếu đổi ports.bridge khác 8787: lần đầu nhập WebSocket URL mà start.cmd in ra ở màn hình Kết nối.
+   e. Nếu đổi ports.bridge khác 8787: lần đầu nhập WebSocket URL mà start.cmd in ra ở màn hình Kết nối.
 
 3. DỪNG
    Bấm Ctrl+C trong cửa sổ start.cmd và chờ vài giây. Bấm Ctrl+C lần nữa để dừng ngay.
    Nếu cửa sổ hỏi "Terminate batch job (Y/N)?", gõ Y rồi Enter. Trả lời Y hay N đều an toàn.
    Ctrl+C lúc worker đang làm dở cũng an toàn: lần start sau, việc dở trong worktree được cất vào git stash
    (tên "mps-bridge auto-stash <worker> <thời điểm>", xem bằng git -C <worktree> stash list), không bị xóa.
-   Mỗi lúc chỉ một start.cmd / update.cmd chạy trên thư mục này (file khóa data\mps-bridge.lock).
+   Mỗi lúc chỉ một start.cmd / prepare.cmd / update.cmd chạy trên thư mục này (file khóa data\mps-bridge.lock).
 
 4. CẬP NHẬT
-   Dừng dịch vụ trước (mục 3), rồi chạy update.cmd. Xong thì chạy lại start.cmd.
+   Dừng dịch vụ trước (mục 3), rồi chạy update.cmd. Xong thì chạy lại start.cmd. update.cmd cũng tạo prepare.cmd
+   cho bản cài cũ chưa có file này.
    update.cmd từ chối chạy khi dịch vụ còn chạy, hoặc khi bản clone bridge ({{APP_ROOT}}) có thay đổi chưa commit
    hay không ở nhánh main. Nên dùng một bản clone RIÊNG để chạy bridge, không code trên đó.
 
@@ -55,7 +63,16 @@ Mã nguồn bridge: {{APP_ROOT}} (đừng sửa, đừng chạy git clean trong 
    - "git fetch origin ... thất bại": kiểm tra mạng và quyền truy cập repo (thử git fetch trong repo đó).
    - "Không tìm thấy nhánh origin/...": sửa base_branch của repo trong settings.json.
    - "... đã tồn tại nhưng không phải worktree của repo ...": xóa thư mục đó trong worktrees\ (nếu không cần) hoặc đổi tên repo.
-   - "Tạo worktree ... thất bại": đọc thông báo git đi kèm; thường do đường dẫn bị khóa hoặc nhánh lỗi.
+   - "Tạo worktree ... thất bại": đọc thông báo git đi kèm; thường do đường dẫn bị khóa hoặc nhánh lỗi. Phần tạo
+     dở đã được tự xóa; sửa nguyên nhân rồi chạy lại prepare.cmd.
+   - "... quá 10 phút" (git fetch hoặc tạo worktree): mạng chậm hoặc repo rất lớn. Chạy lại prepare.cmd. Nếu vẫn
+     quá giờ, tự chạy git fetch origin <base_branch> trong repo đó rồi chạy lại.
+   - "Worktree ... bị tạo dở ở lần chạy trước ... đã xóa và tạo lại": lần trước bị dừng hoặc quá giờ giữa lúc tạo,
+     và worktree đó chưa có commit/checkout nào; script đã xóa và tạo lại.
+   - "Worktree ... còn khóa "initializing" ... đã mở khóa và giữ nguyên": worktree tạo dở nhưng đã được dùng sau
+     đó; script không xóa. Nếu worker ở slot đó báo thiếu file, xem git -C <worktree> status.
+   - "Không dọn được worktree tạo dở ...": đóng Unity/IDE/Explorer đang mở thư mục đó rồi chạy lại, hoặc chạy
+     lệnh git worktree remove được in ra.
    - "Worktree ... còn việc dở: đã cất vào stash": bình thường sau khi dừng giữa chừng; lấy lại bằng git stash list / pop.
    - "Worktree ... không tự stash được": vào worktree đó xem git status (thường do merge/rebase đang dở), dọn tay.
      Worker ở worktree bẩn sẽ báo conflict cho tới khi dọn xong. Script không tự xóa gì.

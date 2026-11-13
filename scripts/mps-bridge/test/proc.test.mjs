@@ -1,21 +1,34 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { after, describe, it } from "node:test";
 import { UserError } from "../lib/errors.mjs";
 import { BRIDGE_ENV_OVERRIDES, buildShellCommand, cleanChildEnv, run, which } from "../lib/proc.mjs";
 
 const IS_WINDOWS = process.platform === "win32";
+const BACKEND_CONFIG = fileURLToPath(new URL("../../../packages/backend/src/config.ts", import.meta.url));
 
 describe("cleanChildEnv", () => {
-  it("removes all 11 override keys (any case) and keeps the rest", () => {
-    assert.equal(BRIDGE_ENV_OVERRIDES.length, 11);
+  it("removes all 12 override keys (any case) and keeps the rest", () => {
+    assert.equal(BRIDGE_ENV_OVERRIDES.length, 12);
     const base = Object.fromEntries(BRIDGE_ENV_OVERRIDES.map((k) => [k, "x"]));
     base.bridge_port = "1";
     base.PATH = "p";
     base.KEEP_ME = "k";
     assert.deepEqual(cleanChildEnv(base), { PATH: "p", KEEP_ME: "k" });
+  });
+
+  it("covers every env variable the backend config reads (parity with packages/backend/src/config.ts)", () => {
+    const source = readFileSync(BACKEND_CONFIG, "utf8");
+    // envOverrides' helpers int("X", …) / str("X", …), plus direct reads env.X / env["X"].
+    const helperKeys = [...source.matchAll(/\b(?:int|str|bool)\(\s*"([A-Z][A-Z0-9_]*)"/g)].map((m) => m[1]);
+    const directKeys = [...source.matchAll(/\benv(?:\.([A-Z][A-Z0-9_]*)|\[\s*"([A-Z][A-Z0-9_]*)"\s*\])/g)].map((m) => m[1] ?? m[2]);
+    const read = new Set([...helperKeys, ...directKeys]);
+    assert.ok(read.has("BRIDGE_PORT") && read.has("WAKE_MODE") && read.has("BRIDGE_CONFIG"), `parser found: ${[...read].join(", ")}`);
+    const missing = [...read].filter((k) => !BRIDGE_ENV_OVERRIDES.includes(k));
+    assert.deepEqual(missing, [], "add these to BRIDGE_ENV_OVERRIDES: a stray shell variable would override the generated config");
   });
 });
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -275,7 +275,142 @@ describe("ensureWorktrees", () => {
     const clean = await ensureWorktrees([spec(1), spec(2)], p);
     assert.ok(!clean.warnings.some((w) => w.includes(".claude/settings.json")));
   });
+
+  it("progress: one skip line and no fetch when every worktree exists", async () => {
+    const lines = [];
+    await ensureWorktrees([spec(1), spec(2)], p, { onProgress: (l) => lines.push(l) });
+    assert.deepEqual(lines, ["Worktree đã có sẵn (2), bỏ qua bước tạo."]);
+  });
+
+  it("progress: fetch, then each add counted over the worktrees to create", async () => {
+    rmSync(spec(2).wtPath, { recursive: true, force: true });
+    const lines = [];
+    const report = await ensureWorktrees([spec(1), spec(2)], p, { onProgress: (l) => lines.push(l) });
+    assert.deepEqual(report.created, [spec(2).wtPath]);
+    assert.deepEqual(lines, [
+      "Đã có sẵn 1/2 worktree, chỉ tạo 1 worktree còn thiếu.",
+      "Đang fetch origin/develop cho repo game (có thể mất vài phút)…",
+      `Đang tạo worktree ${spec(2).wtPath} (1/1, có thể mất tới 10 phút)…`,
+      `Đã tạo worktree ${spec(2).wtPath}.`,
+    ]);
+  });
+
+  it("an add killed mid-checkout ('initializing' lock left) is deleted and re-created, never stashed", async () => {
+    const wt = spec(2).wtPath;
+    const stashesBefore = git(repo, "stash", "list");
+    // What a killed `git worktree add` leaves: the lock it writes before the checkout, the index lock of the checkout
+    // it was running, and a half checkout.
+    writeFileSync(path.join(adminDir(wt), "locked"), "initializing\n");
+    writeFileSync(path.join(adminDir(wt), "index.lock"), "");
+    rmSync(path.join(wt, "a.txt"));
+    writeFileSync(path.join(wt, "half-written.tmp"), "x");
+    const lines = [];
+    const report = await ensureWorktrees([spec(1), spec(2)], p, { onProgress: (l) => lines.push(l) });
+    assert.deepEqual(report.created, [wt]);
+    assert.deepEqual(report.stashed, []);
+    assert.deepEqual(report.dirty, []);
+    const warning = report.warnings.find((w) => w.startsWith(`Worktree ${wt} bị tạo dở ở lần chạy trước`));
+    assert.ok(warning?.includes("chưa có commit/checkout nào sau khi tạo"), report.warnings.join("\n"));
+    assert.ok(lines.includes(`Đang dọn worktree tạo dở từ lần chạy trước: ${wt}…`), lines.join("\n"));
+    assert.ok(existsSync(path.join(wt, "a.txt")), "re-created from origin/<base>");
+    assert.ok(!existsSync(path.join(wt, "half-written.tmp")));
+    assert.equal(git(wt, "status", "--porcelain").trim(), "");
+    assert.ok(!/^locked/m.test(git(repo, "worktree", "list", "--porcelain")), "the new worktree is not locked");
+    assert.equal(git(repo, "stash", "list"), stashesBefore, "nothing stashed");
+  });
+
+  it("an 'initializing' leftover whose folder is gone too is re-created", async () => {
+    const wt = spec(2).wtPath;
+    writeFileSync(path.join(adminDir(wt), "locked"), "initializing\n");
+    rmSync(wt, { recursive: true, force: true });
+    const report = await ensureWorktrees([spec(1), spec(2)], p);
+    assert.deepEqual(report.created, [wt]);
+    assert.equal(git(wt, "rev-parse", "--abbrev-ref", "HEAD").trim(), "HEAD");
+  });
+
+  it("an 'initializing' leftover that was used since (HEAD moved) is unlocked and kept, never deleted", async () => {
+    const wt = spec(2).wtPath;
+    git(wt, "checkout", "-b", "leftover-x");
+    writeFileSync(path.join(wt, "work.txt"), "worker output\n");
+    writeFileSync(path.join(adminDir(wt), "locked"), "initializing\n");
+    try {
+      const report = await ensureWorktrees([spec(1), spec(2)], p);
+      assert.deepEqual(report.created, []);
+      assert.deepEqual(report.stashed, [wt], "treated like any existing worktree: leftover work is stashed");
+      const w = report.warnings.find((x) => x.startsWith(`Worktree ${wt} còn khóa "initializing"`));
+      assert.ok(w?.includes("đã mở khóa và giữ nguyên, không xóa"), report.warnings.join("\n"));
+      assert.ok(!/^locked/m.test(git(repo, "worktree", "list", "--porcelain")), "unlocked");
+      assert.match(git(wt, "stash", "list"), /mps-bridge auto-stash w-game-02 /);
+      assert.match(git(wt, "reflog", "-n", "5", "--format=%gs", "HEAD"), /checkout: moving from [0-9a-f]+ to leftover-x/);
+    } finally {
+      git(wt, "stash", "drop");
+      git(wt, "checkout", "--detach", "origin/develop");
+      git(repo, "branch", "-D", "leftover-x");
+    }
+  });
+
+  it("a failed add never deletes a regular file that was already at the slot path", async () => {
+    const file = spec(6).wtPath;
+    writeFileSync(file, "mine\n");
+    try {
+      await assert.rejects(ensureWorktrees([spec(6)], p), (err) =>
+        err instanceof UserError && err.details.some((d) => d.startsWith(`Tạo worktree ${file} thất bại`)));
+      assert.equal(readFileSync(file, "utf8"), "mine\n");
+    } finally {
+      rmSync(file, { force: true });
+    }
+  });
+
+  it("worktrees locked for another reason, and unfinished worktrees that are not slots, are left alone", async () => {
+    const slot = spec(1).wtPath;
+    const other = path.join(dir, "elsewhere", "game-01");
+    git(repo, "worktree", "lock", "--reason", "usb drive", slot);
+    git(repo, "worktree", "add", "--detach", other, "origin/develop");
+    writeFileSync(path.join(adminDir(other), "locked"), "initializing\n");
+    try {
+      const report = await ensureWorktrees([spec(1), spec(2)], p);
+      assert.deepEqual(report.created, []);
+      const list = git(repo, "worktree", "list", "--porcelain");
+      assert.match(list, /locked usb drive/);
+      assert.match(list, /locked initializing/);
+      assert.ok(existsSync(path.join(slot, "a.txt")) && existsSync(path.join(other, "a.txt")));
+    } finally {
+      git(repo, "worktree", "unlock", slot);
+      git(repo, "worktree", "remove", "--force", "--force", other);
+    }
+  });
+
+  it("an add that times out mid-checkout leaves no folder and no registration behind", async () => {
+    // A smudge filter that hangs keeps `git worktree add` in its checkout (lock "initializing") past the timeout.
+    const attributes = path.join(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").trim(), "info", "attributes");
+    mkdirSync(path.dirname(attributes), { recursive: true });
+    writeFileSync(attributes, "a.txt filter=slow\n");
+    git(repo, "config", "filter.slow.smudge", "sleep 8; cat");
+    const wt = spec(5).wtPath;
+    try {
+      await assert.rejects(ensureWorktrees([spec(5)], p, { worktreeTimeoutMs: 2000 }), (err) => {
+        assert.ok(err instanceof UserError && err.exitCode === 3);
+        assert.ok(err.details.some((d) => d === `Tạo worktree ${wt} thất bại: quá 2 giây`), err.details.join("\n"));
+        assert.ok(!err.details.some((d) => d.startsWith("Không dọn được")), err.details.join("\n"));
+        return true;
+      });
+      assert.ok(!existsSync(wt), "the folder this attempt created is gone");
+      const list = git(repo, "worktree", "list", "--porcelain");
+      assert.ok(!list.toLowerCase().includes("game-05"), list);
+    } finally {
+      git(repo, "config", "--unset", "filter.slow.smudge");
+      rmSync(attributes, { force: true });
+    }
+  });
 });
+
+/**
+ * The worktree's admin folder (<repo>/.git/worktrees/<id>), where git keeps the "locked" file.
+ * @param {string} wt
+ */
+function adminDir(wt) {
+  return git(wt, "rev-parse", "--absolute-git-dir").trim();
+}
 
 describe("ancestorClaudeMdWarnings", () => {
   it("reports every instruction file in the start dirs and their parents, .claude\\CLAUDE.md of a parent home too", () => {

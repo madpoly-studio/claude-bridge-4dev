@@ -60,6 +60,7 @@ export function oldInstallWorkspace(appRoot = APP_ROOT) {
  * @property {string} app bridge checkout root
  * @property {string} settings
  * @property {string} startCmd
+ * @property {string} prepareCmd
  * @property {string} updateCmd
  * @property {string} guide
  * @property {string} generated
@@ -101,6 +102,7 @@ export function workspacePaths(root, appRoot = APP_ROOT) {
     app,
     settings: j("settings.json"),
     startCmd: j("start.cmd"),
+    prepareCmd: j("prepare.cmd"),
     updateCmd: j("update.cmd"),
     guide: j("HUONG-DAN.txt"),
     generated,

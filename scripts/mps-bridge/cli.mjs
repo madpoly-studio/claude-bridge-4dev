@@ -1,16 +1,24 @@
 #!/usr/bin/env node
-// mps-bridge launcher: `init | start | update [--workspace <dir>]`. Orders the steps and maps errors to exit codes;
-// every rule lives in lib/.
+// mps-bridge launcher: `init | prepare | start | update [--workspace <dir>]`. Orders the steps and maps errors to exit
+// codes; every rule lives in lib/.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { lockDownWorkspaceAcl } from "./lib/acl.mjs";
 import { buildApp, checkAppRepo, installApp, pullApp } from "./lib/app-repo.mjs";
 import { EXIT, UserError } from "./lib/errors.mjs";
-import { buildWorkspaceFiles } from "./lib/generate.mjs";
+import { buildWorkspaceFiles, worktreeSpecs } from "./lib/generate.mjs";
 import { acquireWorkspaceLock } from "./lib/lock.mjs";
 import { assertWorkspaceLocation, resolveWorkspace, withWorktreesRoot, workspacePaths } from "./lib/paths.mjs";
-import { appDevSecretsWarning, appJiraEnvFile, checkPorts, checkTools, readPortsLoosely, warmUpJiraMcp } from "./lib/preflight.mjs";
+import {
+  appDevSecretsWarning,
+  appJiraEnvFile,
+  checkGit,
+  checkPorts,
+  checkTools,
+  readPortsLoosely,
+  warmUpJiraMcp,
+} from "./lib/preflight.mjs";
 import { cleanChildEnv } from "./lib/proc.mjs";
 import {
   WEB_UI_DEFAULT_BRIDGE_PORT,
@@ -23,7 +31,14 @@ import { runSupervisor } from "./lib/supervisor.mjs";
 import { distMissing, initWorkspace, pruneLogs, readOrCreatePairingToken, writeGenerated } from "./lib/workspace.mjs";
 import { ensureWorktrees } from "./lib/worktrees.mjs";
 
-const USAGE = "Cách dùng: node cli.mjs <init|start|update> [--workspace <thư mục>]";
+const USAGE = [
+  "Cách dùng: node cli.mjs <init|prepare|start|update> [--workspace <thư mục>]",
+  "  init     tạo thư mục làm việc, settings.json mẫu, pairing token, start.cmd / prepare.cmd / update.cmd",
+  "  prepare  chỉ tạo worktree cho worker: git fetch và git worktree add (mỗi bước tối đa 10 phút), bỏ qua",
+  "           worktree đã có, tự xóa và tạo lại worktree bị tạo dở ở lần chạy trước",
+  "  start    bước prepare, rồi chạy backend + runner + web",
+  "  update   git pull, cài thư viện, build, ghi lại launcher",
+].join("\n");
 const GRACEFUL_TIMEOUT_MS = 20_000;
 const BACKEND_READY = Object.freeze({ timeoutMs: 60_000, intervalMs: 500 });
 const WEB_READY = Object.freeze({ timeoutMs: 30_000, intervalMs: 500 });
@@ -50,18 +65,18 @@ async function cmdInit(p) {
   console.log(`Mã nguồn bridge: ${p.app}`);
   console.log(createdSettings ? `  Đã tạo ${p.settings} (mẫu cần điền).` : `  Giữ nguyên ${p.settings}.`);
   console.log(createdToken ? `  Đã tạo pairing token: ${p.pairingTokenFile}` : "  Giữ nguyên pairing token.");
-  console.log(`  Đã ghi ${p.startCmd}, ${p.updateCmd}, ${p.guide}`);
+  console.log(`  Đã ghi ${p.startCmd}, ${p.prepareCmd}, ${p.updateCmd}, ${p.guide}`);
   const aclWarning = await lockDownWorkspaceAcl(p.root);
   if (aclWarning !== null) {
     warn(aclWarning);
   }
   console.log("");
-  console.log(`Bước tiếp theo: mở ${p.settings}, điền mọi chỗ <...>, lưu lại rồi chạy start.cmd.`);
+  console.log(`Bước tiếp theo: mở ${p.settings}, điền mọi chỗ <...>, lưu lại, chạy prepare.cmd (tạo worktree) rồi start.cmd.`);
   return EXIT.OK;
 }
 
 /**
- * Steps 1-2 of start: parse + validate. No side effects.
+ * Steps 1-2 of prepare/start: parse + validate. No side effects.
  * @param {WorkspacePaths} p
  * @returns {Settings}
  */
@@ -76,7 +91,7 @@ function loadSettings(p) {
   if (result.settings === null) {
     const lines = [`settings.json có ${result.errors.length} lỗi cần sửa (${p.settings}):`];
     result.errors.forEach((e, i) => lines.push(`  ${i + 1}. ${e}`));
-    lines.push("Sửa xong lưu file rồi chạy lại start.cmd.");
+    lines.push("Sửa xong lưu file rồi chạy lại (start.cmd hoặc prepare.cmd).");
     throw new UserError(lines.join("\n"), EXIT.SETTINGS);
   }
   result.warnings.forEach(warn);
@@ -127,6 +142,45 @@ function banner(settings, token) {
 }
 
 /**
+ * The worktree step shared by prepare and start: creates the missing worktrees (skips existing ones), discards ones an
+ * earlier run left half-created, stashes leftover work. Needs only settings and git.
+ * @param {Settings} settings
+ * @param {WorkspacePaths} p effective paths (after withWorktreesRoot)
+ */
+async function prepareWorktrees(settings, p) {
+  console.log("Đang chuẩn bị worktree cho worker…");
+  try {
+    mkdirSync(p.worktrees, { recursive: true });
+  } catch (err) {
+    throw new UserError(
+      `Không tạo được thư mục worktree ${p.worktrees} (${/** @type {Error} */ (err).message}). Kiểm tra worktrees_dir trong settings.json.`,
+      EXIT.ENVIRONMENT,
+    );
+  }
+  const report = await ensureWorktrees(worktreeSpecs(settings, p), p, { onProgress: (line) => console.log(`  ${line}`) });
+  report.warnings.forEach(warn);
+}
+
+/**
+ * Worktrees only: no ports, build, mcp warm-up or pairing token. For the first, slow setup of a large repo.
+ * @param {WorkspacePaths} base
+ * @returns {Promise<number>}
+ */
+async function cmdPrepare(base) {
+  const settings = loadSettings(base);
+  const p = withWorktreesRoot(base, settings.worktrees_dir);
+  // A running start holds the lock: its runner may be using the worktrees.
+  acquireWorkspaceLock(p.data, "prepare");
+  const gitError = checkGit();
+  if (gitError !== null) {
+    throw new UserError("Thiếu công cụ:", EXIT.ENVIRONMENT, [gitError]);
+  }
+  await prepareWorktrees(settings, p);
+  console.log("Worktree đã sẵn sàng. Chạy start.cmd.");
+  return EXIT.OK;
+}
+
+/**
  * @param {WorkspacePaths} base
  * @returns {Promise<number>}
  */
@@ -155,6 +209,10 @@ async function cmdStart(base) {
     throw new UserError("Thiếu công cụ:", EXIT.ENVIRONMENT, toolErrors);
   }
 
+  // Before the build and the mcp warm-up: it needs nothing generated, is the slowest step on a first start, and a
+  // failure here (fetch, path, disk) is reported before anything else is spent.
+  await prepareWorktrees(settings, p);
+
   await ensureBuilt(p);
 
   console.log("Đang chuẩn bị mcp-atlassian (lần đầu có thể mất vài phút)…");
@@ -168,18 +226,6 @@ async function cmdStart(base) {
   const files = buildWorkspaceFiles(settings, p, token, devJiraEnv === null ? [] : [devJiraEnv]);
   writeGenerated(p, files);
 
-  console.log("Đang chuẩn bị worktree cho worker…");
-  try {
-    mkdirSync(p.worktrees, { recursive: true });
-  } catch (err) {
-    throw new UserError(
-      `Không tạo được thư mục worktree ${p.worktrees} (${/** @type {Error} */ (err).message}). Kiểm tra worktrees_dir trong settings.json.`,
-      EXIT.ENVIRONMENT,
-    );
-  }
-  const report = await ensureWorktrees(files.worktrees, p);
-  report.created.forEach((wt) => console.log(`  Đã tạo worktree ${wt}`));
-  report.warnings.forEach(warn);
   pruneLogs(p, LOG_RETENTION_DAYS);
 
   const env = cleanChildEnv();
@@ -266,7 +312,7 @@ async function main() {
     return EXIT.RUNTIME;
   }
   const [command, ...extra] = parsed.positionals;
-  if (extra.length > 0 || !["init", "start", "update"].includes(command)) {
+  if (extra.length > 0 || !["init", "prepare", "start", "update"].includes(command)) {
     console.error(USAGE);
     return EXIT.RUNTIME;
   }
@@ -275,6 +321,9 @@ async function main() {
     assertWorkspaceLocation(p.root, p.app);
     if (command === "init") {
       return await cmdInit(p);
+    }
+    if (command === "prepare") {
+      return await cmdPrepare(p);
     }
     if (command === "start") {
       return await cmdStart(p);

@@ -344,10 +344,11 @@ function orchestratorRecords(at: At): SessionEventRecord[] {
   const s = DEMO_IDS.orchestratorSession;
   const sys = (id: number, minutesAgo: number, events: Parameters<typeof formatWakeTurn>[0]) =>
     rec(id, s, null, at(minutesAgo), "system", { type: "user_text", text: formatWakeTurn(events) });
+  // wake_mode manual (mặc định): lời chào lúc backend khởi động, orchestrator chỉ làm khi người dùng yêu cầu.
   return [
-    sys(1, 13, [{ type: "ticket.created", ticket_key: "SH-131" }]),
-    sys(2, 12.8, [{ type: "task.completed", task_id: "t-84", ticket_key: "SH-124" }]),
-    sys(3, 12.5, [{ type: "tick" }]),
+    rec(1, s, null, at(15), "system", { type: "bridge_welcome", text: demoWelcomeText(at(15)) }),
+    rec(2, s, null, at(13), "user", { type: "user_text", text: "Giao các ticket label agent đang sẵn sàng cho worker rảnh." }),
+    sys(3, 12.8, [{ type: "task.completed", task_id: "t-84", ticket_key: "SH-124" }]),
     rec(
       4,
       s,
@@ -363,8 +364,26 @@ function orchestratorRecords(at: At): SessionEventRecord[] {
     rec(6, s, null, at(6), "user", { type: "user_text", text: "Ưu tiên SH-130 trước các ticket còn lại." }),
     rec(7, s, null, at(5.9), "agent", assistantText("Đã ghi nhận. SH-130 sẽ được giao ngay khi có worker idle trên repo client.")),
     sys(8, 3, [{ type: "task.failed", task_id: "t-85", ticket_key: "SH-127", category: "build_failed" }]),
-    rec(9, s, null, at(2.8), "agent", assistantText("SH-127 lỗi build ở lần thử 1. Chờ w-sh-03 idle để giao lại lần thử 2.")),
+    rec(9, s, null, at(2.8), "agent", assistantText("SH-127 lỗi build ở lần thử 1 (build_failed). Bạn có muốn giao lại không?")),
   ];
+}
+
+/** Cùng bố cục với `formatWelcome` của backend. */
+function demoWelcomeText(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const time = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return [
+    `Bridge đã khởi động lúc ${time} · project \`SH\`.`,
+    "Chế độ thủ công: orchestrator chỉ làm khi bạn yêu cầu, không tự nhận ticket. Bridge chỉ báo lại khi task bạn giao xong hoặc lỗi.",
+    [
+      "Repo của project:",
+      "- `sniper-hunting-client` · D:/repos/sniper-hunting-client",
+      "- `sniper-hunting-server` · D:/repos/sniper-hunting-server",
+      "Worker sẽ hiện ở tab Workers khi runner đăng ký.",
+    ].join("\n"),
+    ["Ví dụ yêu cầu:", "- Liệt kê các ticket label agent đang mở", "- Giao SH-123 cho worker rảnh", "- Tình hình các worker?"].join("\n"),
+  ].join("\n\n");
 }
 
 function taskRecords(at: At): SessionEventRecord[] {

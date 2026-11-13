@@ -6,6 +6,7 @@ import {
   describeTool,
   formatToolChip,
   isReadOnlyTool,
+  lastSystemTurnTs,
   summarizeToolGroup,
   toolDisplayName,
   wakeEventTypes,
@@ -153,5 +154,55 @@ describe("render phòng thủ", () => {
     ]);
     expect(rows.map((r) => r.source)).toEqual(["system", "jira", "agent", "result", "?"]);
     expect(rows[1]?.tone).toBe("warn");
+  });
+});
+
+describe("lời chào và thông báo của bridge", () => {
+  const welcomeText = "Bridge đã khởi động lúc 2026-11-11 17:00 · project `SH`.\n\nVí dụ yêu cầu:\n- Tình hình các worker?";
+  const welcome = (id: number, ts = "2026-11-11T10:00:00Z") =>
+    record(id, { type: "bridge_welcome", text: welcomeText }, { origin: "system", ts });
+  const notice = (id: number, ts = "2026-11-11T10:00:00Z") =>
+    record(id, { type: "bridge_notice", message: "Claude process exited" }, { origin: "system", ts });
+  const wake = (id: number, ts: string) =>
+    record(id, { type: "user_text", text: formatWakeTurn([{ type: "task.completed", task_id: "t-1" }]) }, { origin: "system", ts });
+
+  it("bridge_welcome thành một khối riêng, không gộp vào turn hệ thống", () => {
+    const items = buildStreamItems([welcome(1), wake(2, "2026-11-11T10:01:00Z")], { collapseReadOnly: false });
+    expect(kinds(items)).toEqual(["welcome", "system-turns"]);
+    expect(items[0]).toMatchObject({ kind: "welcome", text: welcomeText });
+  });
+
+  it("bridge_notice thành notice cảnh báo thay vì dòng JSON thô", () => {
+    const items = buildStreamItems([notice(1)], { collapseReadOnly: false });
+    expect(items).toEqual([{ kind: "notice", key: "1:0", ts: "2026-11-11T10:00:00Z", tone: "warn", text: "Claude process exited" }]);
+  });
+
+  it("shape lạ của event bridge vẫn không ném lỗi", () => {
+    const items = buildStreamItems(
+      [record(1, { type: "bridge_welcome" }, { origin: "system" }), record(2, { type: "bridge_notice", message: 5 }, { origin: "system" })],
+      { collapseReadOnly: false },
+    );
+    expect(kinds(items)).toEqual(["raw", "notice"]);
+  });
+
+  it("lastSystemTurnTs chỉ tính turn hệ thống thật, bỏ qua lời chào / notice", () => {
+    expect(lastSystemTurnTs([welcome(1), notice(2)])).toBeNull();
+    expect(
+      lastSystemTurnTs([
+        welcome(1),
+        wake(2, "2026-11-11T10:05:00Z"),
+        record(3, { type: "user_text", text: "Tình hình?" }, { origin: "user", ts: "2026-11-11T10:06:00Z" }),
+        notice(4, "2026-11-11T10:07:00Z"),
+      ]),
+    ).toBe("2026-11-11T10:05:00Z");
+  });
+
+  it("buildLogRows có dòng nguồn bridge", () => {
+    const rows = buildLogRows([welcome(1), notice(2)]);
+    expect(rows.map((r) => [r.source, r.tone])).toEqual([
+      ["bridge", "dim"],
+      ["bridge", "warn"],
+    ]);
+    expect(rows[1]?.detail).toBe("Claude process exited");
   });
 });

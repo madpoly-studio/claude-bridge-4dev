@@ -17,7 +17,7 @@ pnpm --filter @claude-bridge/backend typecheck # src + test
 Configuration: `bridge.config.json` in the current directory, or the path in `BRIDGE_CONFIG`
 (scripts run with cwd = `packages/backend`, so use for example `BRIDGE_CONFIG=../../bridge.config.json`).
 See `bridge.config.example.json` at the repo root. Relative paths in the file resolve against the file's folder.
-Env overrides: `BRIDGE_PORT`, `MAX_CONCURRENCY`, `TASK_TIMEOUT_MINUTES`, `ORCH_TICK_MINUTES`, `JIRA_POLL_SECONDS`,
+Env overrides: `BRIDGE_PORT`, `MAX_CONCURRENCY`, `TASK_TIMEOUT_MINUTES`, `ORCH_TICK_MINUTES`, `WAKE_MODE`, `JIRA_POLL_SECONDS`,
 `ALLOWED_ORIGINS` (comma list), `CLAUDE_AUTH_MODE`, `BRIDGE_PAIRING_TOKEN`, `RUNNER_BOOTSTRAP_TOKEN`, `LOG_LEVEL`.
 
 At startup the backend prints the pairing token (paste it into the UI once). The runner bootstrap token comes from
@@ -47,6 +47,7 @@ Plain JSON-RPC to `/mcp` needs `Accept: application/json, text/event-stream`.
 | `planner.setting_sources` | `[]` | Claude Code settings sources to load: only `user` is accepted. `project` / `local` are rejected because they come from the repo, which workers write (`.claude/settings.json` can set hooks, `env` such as `ANTHROPIC_BASE_URL`, `apiKeyHelper`). Put `CLAUDE.md` content into `planner.system_prompt_append` instead |
 | `orchestrators.<KEY>` | none | One orchestrator per Jira project (`KEY` must be in `projects`): `cwd` (dedicated folder, must exist), `mcp_servers`, `allowed_tools`, `system_prompt_append`, `model`, `setting_sources` (`project` is allowed here: the cwd is a dedicated config folder) |
 | `orchestrator_autostart` | `true` | Start every configured orchestrator when the backend listens; `false` = start on `project.select` or on the first message |
+| `wake_mode` | `manual` | `manual`: the orchestrator acts only on user requests; only `task.completed` / `task.failed` wake it. `auto`: also `worker.registered`, `ticket.created` with the agent label, a `tick` every `orch_tick_minutes` and a `tick` after a crash-restart (see Wake Dispatcher). Also selects the orchestrator prompt |
 | `jira_create_tool_pattern` | create_issue names | Regex of the Jira create-issue tool that goes through the approval gate |
 | `jira_env_file` | `null` | Team `.env` with `MPS_JIRA_URL`, `MPS_JIRA_PAT`, `MPS_JIRA_PROJECT_KEY`, `MPS_CA_BUNDLE` (CA path may be relative to the `.env` folder). Must be outside every `repos[].path` (planners can read repos); config parsing fails otherwise |
 
@@ -93,7 +94,8 @@ files left by a killed backend are removed at the next start.
   The creating connection is subscribed to the session's events.
 - Every SDK message is written to `session_events` (origin `agent`) before it is pushed as `session.event`. Typed text
   is stored as `{type:"user_text", text}` with origin `user`; wake turns use origin `system`; bridge notices (process
-  died) are `{type:"bridge_notice", message}` with origin `system`.
+  died) are `{type:"bridge_notice", message}` with origin `system`. The startup welcome is `{type:"bridge_welcome", text}`
+  with origin `system` (display only, never sent to Claude).
 - The `init` message stores `claude_session_id` and moves the session to `active`.
 - `busy` is true from a send until the turn's `result`; every change is pushed as `session.updated` (broadcast).
 - Backend start: sessions in `starting` / `active` become `detached` (graceful shutdown does the same). The next
@@ -115,8 +117,11 @@ files left by a killed backend are removed at the next start.
 The orchestrator session for a project is reused across restarts (resume by `claude_session_id`). If its process dies,
 the backend respawns it with resume after 1 s, 2 s, 4 s ... (max 60 s); `status.orchestrator` goes `restarting` then
 `alive`, or `dead` after 5 consecutive failures (a run of 5 min or a completed turn resets the count; a user message to a
-dead orchestrator restarts it). After a respawn a `tick` wake is queued so it rebuilds the picture. No turn is sent at
-startup; the first trigger (worker registration, tick) wakes it.
+dead orchestrator restarts it). In `wake_mode: auto`, a `tick` wake is queued after a respawn so it rebuilds the
+picture. No turn is sent at startup. Instead, the first time each orchestrator goes live in a backend process (inside
+`startAll()` with autostart, otherwise on `project.select` / its first message, before that message), a `bridge_welcome`
+event is recorded: start time, project key, wake mode, this project's repos, and example requests. A crash-restart does
+not record another one.
 
 ### Permission Broker
 
@@ -132,8 +137,9 @@ publishes `ticket.created`. A denied request never produces `ticket.created`.
 
 ### Wake Dispatcher
 
-Triggers: `ticket.created` with `has_agent_label`, `task.completed`, `task.failed` (routed by the ticket key's project),
-`worker.registered` (all orchestrators), and a `tick` every `orch_tick_minutes`. Triggers within
+Triggers in `wake_mode: manual` (default): only `task.completed` and `task.failed` (routed by the ticket key's project).
+In `wake_mode: auto` there are also `ticket.created` with `has_agent_label`, `worker.registered` (all orchestrators), a `tick`
+every `orch_tick_minutes`, and a `tick` after a crash-restart. Triggers within
 `wake_debounce_seconds` of the first one are merged into one `[bridge-event]` turn (`formatWakeTurn`, identifiers only,
 duplicates removed). If the orchestrator is mid-turn the events wait and are sent as one turn when its `result`
 arrives. Events for an orchestrator that is stopped or dead are dropped (it rebuilds its picture when it starts).

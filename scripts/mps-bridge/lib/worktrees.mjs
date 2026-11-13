@@ -1,7 +1,9 @@
 // One detached git worktree per worker slot. Creates missing ones, stashes leftover work in dirty ones (never deletes
-// or resets), and warns about setups that weaken the worker sandbox or break it: stale worktrees in an old location,
-// paths near the Windows limit, a JS repo below the bridge checkout, CLAUDE.md files above the worktrees.
-import { readdirSync, statSync } from "node:fs";
+// or resets them), and warns about setups that weaken the worker sandbox or break it: stale worktrees in an old
+// location, paths near the Windows limit, a JS repo below the bridge checkout, CLAUDE.md files above the worktrees.
+// The only worktrees it ever deletes are half-created slot worktrees: its own failed add, or one an earlier run left
+// unfinished (git's "initializing" lock still in place).
+import { existsSync, lstatSync, readdirSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { EXIT, UserError } from "./errors.mjs";
@@ -10,8 +12,20 @@ import { cleanChildEnv, run } from "./proc.mjs";
 
 /** Characters: MAX_PATH (260) minus a margin for build outputs that are not in git (Unity Library\, obj\). */
 export const LONG_PATH_WARN = 240;
+/** Commands that only read refs/objects (rev-parse, worktree list, show, ls-tree): fast even on a large repo. */
 const GIT_TIMEOUT_MS = 30_000;
-const GIT_FETCH_TIMEOUT_MS = 180_000;
+/** status walks the whole work tree: on a large (Unity) checkout with a cold disk cache that can pass 30 s. */
+const GIT_STATUS_TIMEOUT_MS = 120_000;
+/** The first fetch of a large repo downloads everything. */
+const GIT_FETCH_TIMEOUT_MS = 600_000;
+/**
+ * Commands that write or delete a whole checkout (worktree add/remove, stash push, checkout). Generous on purpose: a
+ * kill mid-way leaves a half-done checkout behind.
+ */
+const GIT_WORKTREE_TIMEOUT_MS = 600_000;
+/** Lock reason `git worktree add` writes before its checkout and deletes after it; still there = the add was killed. */
+const UNFINISHED_LOCK_REASON = "initializing";
+const MINUTE_MS = 60_000;
 const REPO_CLAUDE_SETTINGS = ".claude/settings.json";
 const SLOT_DIR_RE = /^(.+)-(\d{2,})$/;
 const BRANCH_REF_PREFIX = "refs/heads/";
@@ -26,13 +40,31 @@ const CLAUDE_MD_FILES = Object.freeze(["CLAUDE.md", "CLAUDE.local.md", path.join
 
 /**
  * A worktree git has registered for a repo. `path` is for display, `key` for comparisons; `branch` is "feature/x"
- * for "branch refs/heads/feature/x", null when detached.
- * @typedef {{ path: string, key: string, prunable: boolean, branch: string | null }} RegisteredWorktree
+ * for "branch refs/heads/feature/x", null when detached; `lockReason` is null when not locked, "" for a lock without
+ * a reason.
+ * @typedef {{ path: string, key: string, prunable: boolean, branch: string | null, lockReason: string | null }} RegisteredWorktree
  */
 
-/** Never prompt for credentials: a hidden prompt would hang start. */
+/**
+ * @typedef {object} EnsureWorktreesOptions
+ * @property {number} [longPathLimit] test seam for the long-path threshold
+ * @property {number} [worktreeTimeoutMs] test seam for the worktree add/remove timeout
+ * @property {(line: string) => void} [onProgress] one line per slow step (fetch, each add), for the console
+ */
+
+/**
+ * Never prompt for credentials: a hidden prompt would hang start. LC_ALL=C: git translates the "initializing" lock
+ * reason it writes, and this module matches that text. Everything parsed here is porcelain/plumbing output, which
+ * the locale does not change; only git's messages in errors become English. (Checked on Git for Windows 2.56: paths
+ * with non-ASCII characters and hooks run through sh still work.)
+ */
 function gitEnv() {
-  return { ...cleanChildEnv(), GIT_TERMINAL_PROMPT: "0" };
+  return { ...cleanChildEnv(), GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" };
+}
+
+/** @param {number} ms */
+function durationText(ms) {
+  return ms >= MINUTE_MS && ms % MINUTE_MS === 0 ? `${ms / MINUTE_MS} phút` : `${Math.round(ms / 1000)} giây`;
 }
 
 /**
@@ -41,7 +73,7 @@ function gitEnv() {
  */
 async function git(args, timeoutMs = GIT_TIMEOUT_MS) {
   const result = await run("git", args, { env: gitEnv(), timeoutMs });
-  const stderr = result.timedOut ? `quá ${Math.round(timeoutMs / 1000)} giây` : result.stderr.trim();
+  const stderr = result.timedOut ? `quá ${durationText(timeoutMs)}` : result.stderr.trim();
   return { ok: result.code === 0 && !result.timedOut, stdout: result.stdout.trim(), stderr };
 }
 
@@ -100,24 +132,94 @@ async function registeredWorktrees(repoPath) {
       continue;
     }
     const ref = lines.find((line) => line.startsWith("branch "))?.slice("branch ".length) ?? null;
+    // "locked" or "locked <reason>" (git trims the reason it read from the lock file).
+    const lock = lines.find((line) => line === "locked" || line.startsWith("locked "));
     list.push({
       path: wtPath,
       key,
       prunable: lines.some((line) => line === "prunable" || line.startsWith("prunable ")),
       branch: ref === null ? null : ref.replace(BRANCH_REF_PREFIX, ""),
+      lockReason: lock === undefined ? null : lock.slice("locked".length).trim(),
     });
   }
   return list;
 }
 
 /**
+ * What one repo's slots need, decided before any slow step so the progress lines can count across repos.
+ * Slots registered with git's "initializing" lock come from an add that was killed mid-checkout:
+ * - `unfinished`: never used since (see headMovedSinceAdd): deleted and re-created, never stashed, since their missing
+ *   files would look like uncommitted work;
+ * - `usedLeftover`: used anyway (the start of an older version stashed such a half worktree and handed it to a
+ *   worker): only unlocked, then treated like any existing worktree, so leftover work is stashed, never deleted.
+ * @typedef {{
+ *   repo: string,
+ *   repoSpecs: WorktreeSpec[],
+ *   registered: RegisteredWorktree[],
+ *   unfinished: Set<WorktreeSpec>,
+ *   usedLeftover: Set<WorktreeSpec>,
+ *   toCreate: Set<WorktreeSpec>,
+ * }} RepoPlan
+ */
+
+/**
+ * true when HEAD of the worktree moved after `git worktree add --detach`: that add logs exactly one HEAD reflog entry
+ * with an empty message, and any checkout/commit/reset after it adds one with a message. A folder that is not a
+ * worktree of `repoCommon` (killed before its .git file was written; git would then answer for a parent repo) counts
+ * as unused.
+ * @param {string} wtPath
+ * @param {string | null} repoCommon
+ */
+async function headMovedSinceAdd(wtPath, repoCommon) {
+  if (repoCommon === null || (await commonDir(wtPath)) !== repoCommon) {
+    return false;
+  }
+  // The "x" prefix keeps an empty message as a line of its own after trimming.
+  const r = await git(["-C", wtPath, "reflog", "-n", "2", "--format=x%gs", "HEAD"]);
+  if (!r.ok || r.stdout === "") {
+    return false;
+  }
+  const lines = r.stdout.split(/\r?\n/);
+  return lines.length > 1 || lines[0] !== "x";
+}
+
+/**
+ * @param {Map<string, WorktreeSpec[]>} byRepo
+ * @returns {Promise<RepoPlan[]>}
+ */
+async function planRepos(byRepo) {
+  /** @type {RepoPlan[]} */
+  const plans = [];
+  for (const [repo, repoSpecs] of byRepo) {
+    const repoPath = repoSpecs[0].repoPath;
+    const registered = await registeredWorktrees(repoPath);
+    const lockOf = new Map(registered.map((w) => [w.key, w.lockReason]));
+    const repoCommon = await commonDir(repoPath);
+    const unfinished = new Set();
+    const usedLeftover = new Set();
+    for (const spec of repoSpecs) {
+      if (lockOf.get(comparablePath(spec.wtPath)) !== UNFINISHED_LOCK_REASON) {
+        continue;
+      }
+      const used = isDir(spec.wtPath) && (await headMovedSinceAdd(spec.wtPath, repoCommon));
+      (used ? usedLeftover : unfinished).add(spec);
+    }
+    const toCreate = new Set(repoSpecs.filter((s) => unfinished.has(s) || !isDir(s.wtPath)));
+    plans.push({ repo, repoSpecs, registered, unfinished, usedLeftover, toCreate });
+  }
+  return plans;
+}
+
+/**
  * @param {WorktreeSpec[]} specs
  * @param {WorkspacePaths} p effective paths: p.worktrees is the current worktrees root
- * @param {{ longPathLimit?: number }} [options] test seam for the long-path threshold
+ * @param {EnsureWorktreesOptions} [options]
  * @returns {Promise<WorktreeReport>}
  */
 export async function ensureWorktrees(specs, p, options = {}) {
   const longPathLimit = options.longPathLimit ?? LONG_PATH_WARN;
+  const timeoutMs = options.worktreeTimeoutMs ?? GIT_WORKTREE_TIMEOUT_MS;
+  const progress = options.onProgress ?? (() => {});
   /** @type {WorktreeReport} */
   const report = { created: [], dirty: [], stashed: [], warnings: [] };
   /** @type {string[]} */
@@ -128,35 +230,71 @@ export async function ensureWorktrees(specs, p, options = {}) {
     byRepo.set(spec.repo, [...(byRepo.get(spec.repo) ?? []), spec]);
   }
 
-  for (const [repo, repoSpecs] of byRepo) {
+  const plans = await planRepos(byRepo);
+  const total = plans.reduce((n, plan) => n + plan.toCreate.size, 0);
+  if (total === 0) {
+    progress(`Worktree đã có sẵn (${specs.length}), bỏ qua bước tạo.`);
+  } else if (total < specs.length) {
+    progress(`Đã có sẵn ${specs.length - total}/${specs.length} worktree, chỉ tạo ${total} worktree còn thiếu.`);
+  }
+  let index = 0;
+
+  for (const { repo, repoSpecs, registered, unfinished, usedLeftover, toCreate } of plans) {
     const { repoPath, base } = repoSpecs[0];
     const repoCommon = await commonDir(repoPath);
-    const registered = await registeredWorktrees(repoPath);
     const registeredKeys = new Set(registered.map((w) => w.key));
-    /** @type {boolean | null} null = not fetched yet */
-    let baseReady = null;
-    // The checkout checks (long paths, package.json) run only when a worktree was (re)created, so a warning appears
-    // once per change instead of on every start, and ls-tree on a large repo is not paid each time.
-    let addAttempted = false;
+    let baseReady = true;
+    if (toCreate.size > 0) {
+      progress(`Đang fetch origin/${base} cho repo ${repo} (có thể mất vài phút)…`);
+      baseReady = await prepareBase(repo, repoPath, base, errors);
+    }
 
     for (const spec of repoSpecs) {
-      if (!isDir(spec.wtPath)) {
-        if (baseReady === null) {
-          baseReady = await prepareBase(repo, repoPath, base, errors);
-        }
+      if (toCreate.has(spec)) {
+        index += 1;
         if (!baseReady) {
           continue;
         }
-        addAttempted = true;
+        if (unfinished.has(spec)) {
+          progress(`Đang dọn worktree tạo dở từ lần chạy trước: ${spec.wtPath}…`);
+          const failure = await discardWorktree(repoPath, spec.wtPath, { registered: true, removeFolder: true }, timeoutMs);
+          if (failure !== null) {
+            errors.push(discardFailedMessage(repoPath, spec.wtPath, failure));
+            continue;
+          }
+        }
+        progress(`Đang tạo worktree ${spec.wtPath} (${index}/${total}, có thể mất tới ${durationText(timeoutMs)})…`);
         // A folder deleted by hand stays registered; only that exact path is re-added with --force (no repo-wide prune).
-        const force = registeredKeys.has(comparablePath(spec.wtPath)) ? ["--force"] : [];
-        const add = await git(["-C", repoPath, "worktree", "add", ...force, "--detach", spec.wtPath, `origin/${base}`]);
-        if (add.ok) {
+        const force = registeredKeys.has(comparablePath(spec.wtPath)) && !unfinished.has(spec);
+        const error = await addWorktree(spec, force, timeoutMs);
+        if (error === null) {
           report.created.push(spec.wtPath);
+          progress(`Đã tạo worktree ${spec.wtPath}.`);
+          if (unfinished.has(spec)) {
+            report.warnings.push(
+              `Worktree ${spec.wtPath} bị tạo dở ở lần chạy trước (dừng bằng Ctrl+C hoặc quá thời gian khi đang tạo) ` +
+                "và chưa có commit/checkout nào sau khi tạo: đã xóa và tạo lại.",
+            );
+          }
         } else {
-          errors.push(`Tạo worktree ${spec.wtPath} thất bại: ${add.stderr}`);
+          errors.push(...error);
         }
         continue;
+      }
+      if (usedLeftover.has(spec)) {
+        const unlock = await git(["-C", repoPath, "worktree", "unlock", spec.wtPath]);
+        if (!unlock.ok) {
+          errors.push(
+            `Không mở khóa được worktree ${spec.wtPath} (${unlock.stderr}). Chạy tay: git -C "${repoPath}" worktree unlock ` +
+              `"${spec.wtPath}" rồi chạy lại.`,
+          );
+          continue;
+        }
+        report.warnings.push(
+          `Worktree ${spec.wtPath} còn khóa "${UNFINISHED_LOCK_REASON}" của một lần tạo bị dừng giữa chừng nhưng đã được ` +
+            "dùng sau đó (có checkout/commit): đã mở khóa và giữ nguyên, không xóa. Nếu worker ở slot này báo lỗi " +
+            `file thiếu, kiểm tra bằng git -C "${spec.wtPath}" status.`,
+        );
       }
       const wtCommon = await commonDir(spec.wtPath);
       if (wtCommon === null || repoCommon === null || wtCommon !== repoCommon) {
@@ -170,7 +308,9 @@ export async function ensureWorktrees(specs, p, options = {}) {
     }
     report.warnings.push(...(await repoWarnings(repo, repoPath, base)));
     report.warnings.push(...staleLocationWarnings(repo, repoPath, registered, specs, p.worktrees));
-    if (addAttempted) {
+    // The checkout checks (long paths, package.json) run only when a worktree was (re)created, so a warning appears
+    // once per change instead of on every start, and ls-tree on a large repo is not paid each time.
+    if (toCreate.size > 0 && baseReady) {
       report.warnings.push(...(await checkoutWarnings(repo, repoSpecs, p, longPathLimit)));
     }
   }
@@ -186,18 +326,94 @@ export async function ensureWorktrees(specs, p, options = {}) {
 }
 
 /**
+ * `git worktree add --detach` at a slot path that is not a folder. When it fails (git error or timeout), what this
+ * attempt left is deleted so the next run starts clean: the slot's registration unless it is locked for a reason other
+ * than git's "initializing" (someone's deliberate lock), and the folder at the path, but only when nothing was there
+ * before the attempt (a regular file at the slot path is the user's, and makes the add fail).
+ * @param {WorktreeSpec} spec
+ * @param {boolean} force the path is registered with its folder deleted by hand
+ * @param {number} timeoutMs
+ * @returns {Promise<string[] | null>} error details, null when created
+ */
+async function addWorktree(spec, force, timeoutMs) {
+  const { repoPath, wtPath, base } = spec;
+  const existed = pathExists(wtPath);
+  const forceArgs = force ? ["--force"] : [];
+  const add = await git(["-C", repoPath, "worktree", "add", ...forceArgs, "--detach", wtPath, `origin/${base}`], timeoutMs);
+  if (add.ok) {
+    return null;
+  }
+  const entry = (await registeredWorktrees(repoPath)).find((w) => w.key === comparablePath(wtPath));
+  const registered = entry !== undefined && (entry.lockReason === null || entry.lockReason === UNFINISHED_LOCK_REASON);
+  const failure = await discardWorktree(repoPath, wtPath, { registered, removeFolder: !existed }, timeoutMs);
+  const errors = [`Tạo worktree ${wtPath} thất bại: ${add.stderr}`];
+  if (failure !== null) {
+    errors.push(discardFailedMessage(repoPath, wtPath, failure));
+  }
+  return errors;
+}
+
+/**
+ * Anything at `p`, a dangling symlink included. false also when `p` cannot be inspected (a parent is a file).
+ * @param {string} p
+ */
+function pathExists(p) {
+  try {
+    return lstatSync(p, { throwIfNoEntry: false }) !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Deletes a half-created slot worktree: its registration, then its folder, each only when asked. Only called for a
+ * slot path that git marks unfinished, or after a failed add of this run.
+ * @param {string} repoPath
+ * @param {string} wtPath
+ * @param {{ registered: boolean, removeFolder: boolean }} what
+ * @param {number} timeoutMs
+ * @returns {Promise<string | null>} what went wrong, null when nothing is left
+ */
+async function discardWorktree(repoPath, wtPath, what, timeoutMs) {
+  // The first --force accepts a half checked-out (dirty) tree, the second the lock.
+  const remove = what.registered
+    ? await git(["-C", repoPath, "worktree", "remove", "--force", "--force", wtPath], timeoutMs)
+    : null;
+  if (what.removeFolder && existsSync(wtPath)) {
+    try {
+      rmSync(wtPath, { recursive: true, force: true, maxRetries: 3 });
+    } catch (err) {
+      return `không xóa được thư mục (${/** @type {Error} */ (err).message})`;
+    }
+  }
+  return remove === null || remove.ok ? null : `git worktree remove thất bại (${remove.stderr})`;
+}
+
+/**
+ * @param {string} repoPath
+ * @param {string} wtPath
+ * @param {string} failure
+ */
+function discardFailedMessage(repoPath, wtPath, failure) {
+  return (
+    `Không dọn được worktree tạo dở ${wtPath}: ${failure}. Đóng chương trình đang mở file trong đó (Unity, IDE, ` +
+    `Explorer) rồi chạy lại, hoặc xóa tay: git -C "${repoPath}" worktree remove --force --force "${wtPath}".`
+  );
+}
+
+/**
  * A worker stopped mid-task (Ctrl+C) leaves its worktree dirty, and the runner only assigns into a clean one.
  * The leftover work is stashed (recoverable, never discarded) and HEAD detached so its branch is free again.
  * @param {WorktreeSpec} spec
  * @param {WorktreeReport} report
  */
 async function cleanDirtyWorktree(spec, report) {
-  const status = await git(["-C", spec.wtPath, "status", "--porcelain"]);
+  const status = await git(["-C", spec.wtPath, "status", "--porcelain"], GIT_STATUS_TIMEOUT_MS);
   if (status.ok && status.stdout === "") {
     return;
   }
   const message = `mps-bridge auto-stash ${spec.workerId} ${new Date().toISOString()}`;
-  const stash = status.ok ? await git(["-C", spec.wtPath, "stash", "push", "--include-untracked", "-m", message]) : status;
+  const stash = status.ok ? await git(["-C", spec.wtPath, "stash", "push", "--include-untracked", "-m", message], GIT_WORKTREE_TIMEOUT_MS) : status;
   if (!stash.ok) {
     report.dirty.push(spec.wtPath);
     report.warnings.push(
@@ -206,7 +422,7 @@ async function cleanDirtyWorktree(spec, report) {
     );
     return;
   }
-  const detach = await git(["-C", spec.wtPath, "checkout", "--detach"]);
+  const detach = await git(["-C", spec.wtPath, "checkout", "--detach"], GIT_WORKTREE_TIMEOUT_MS);
   report.stashed.push(spec.wtPath);
   report.warnings.push(
     `Worktree ${spec.wtPath} còn việc dở: đã cất vào stash "${message}" ` +
@@ -224,7 +440,7 @@ async function cleanDirtyWorktree(spec, report) {
  */
 async function repoWarnings(repo, repoPath, base) {
   const warnings = [];
-  const status = await git(["-C", repoPath, "status", "--porcelain"]);
+  const status = await git(["-C", repoPath, "status", "--porcelain"], GIT_STATUS_TIMEOUT_MS);
   if (status.ok && status.stdout !== "") {
     warnings.push(
       `Repo ${repo} (${repoPath}) có thay đổi chưa commit: có vẻ đây là bản clone bạn code hằng ngày. ` +

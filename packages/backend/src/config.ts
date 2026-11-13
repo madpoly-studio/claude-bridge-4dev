@@ -1,7 +1,7 @@
 // Cấu hình backend: file `bridge.config.json` + override bằng biến môi trường (system design mục 13).
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
-import { BUS_MCP_SERVER_NAME, DEFAULTS } from "@claude-bridge/protocol";
+import { BUS_MCP_SERVER_NAME, DEFAULTS, WAKE_MODES } from "@claude-bridge/protocol";
 import { z } from "zod";
 import { canonicalPath, isPathInside } from "./util/paths.js";
 
@@ -102,6 +102,11 @@ const fileSchema = z
     assign_start_timeout_seconds: positiveInt.default(DEFAULTS.ASSIGN_START_TIMEOUT_SECONDS),
     wake_debounce_seconds: positiveInt.default(DEFAULTS.WAKE_DEBOUNCE_SECONDS),
     orch_tick_minutes: positiveInt.default(DEFAULTS.ORCH_TICK_MINUTES),
+    /**
+     * `manual`: orchestrator chỉ làm khi người dùng yêu cầu; chỉ task.completed / task.failed đánh thức nó.
+     * `auto`: thêm worker.registered, ticket.created có label agent, tick mỗi `orch_tick_minutes` và tick sau khi khởi động lại.
+     */
+    wake_mode: z.enum(WAKE_MODES).default(DEFAULTS.WAKE_MODE),
     jira_poll_seconds: positiveInt.default(DEFAULTS.JIRA_POLL_SECONDS),
     agent_label: z.string().min(1).default(DEFAULTS.AGENT_LABEL),
     claude_auth_mode: z.enum(["subscription", "api_key"]).default(DEFAULTS.CLAUDE_AUTH_MODE),
@@ -172,6 +177,7 @@ function envOverrides(env: NodeJS.ProcessEnv): Record<string, unknown> {
   int("ORCH_TICK_MINUTES", "orch_tick_minutes");
   int("JIRA_POLL_SECONDS", "jira_poll_seconds");
   str("CLAUDE_AUTH_MODE", "claude_auth_mode");
+  str("WAKE_MODE", "wake_mode");
   str("BRIDGE_PAIRING_TOKEN", "pairing_token");
   str("RUNNER_BOOTSTRAP_TOKEN", "runner_bootstrap_token");
   const origins = env.ALLOWED_ORIGINS;

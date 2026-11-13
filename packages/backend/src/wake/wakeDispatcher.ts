@@ -1,6 +1,7 @@
 // Wake Dispatcher (mục 8): gộp trigger hệ thống trong cửa sổ WAKE_DEBOUNCE_SECONDS thành một turn `[bridge-event]`
 // (origin system) cho orchestrator của project; orchestrator đang giữa turn thì giữ lại, gửi gộp khi turn kết thúc.
-import { type BusEvent, type WakeEvent, formatWakeTurn } from "@claude-bridge/protocol";
+// Chế độ `manual` (mặc định) chỉ chuyển kết quả task; `auto` thêm worker.registered, ticket.created và tick.
+import { type BusEvent, type WakeEvent, type WakeMode, formatWakeTurn } from "@claude-bridge/protocol";
 import type { EventLog } from "../events/eventLog.js";
 import type { Unsubscribe } from "../util/listeners.js";
 import type { Logger } from "../util/logger.js";
@@ -25,6 +26,8 @@ export interface WakeDispatcherDeps {
   timers: Timers;
   debounceMs: number;
   tickMs: number;
+  /** `manual`: chỉ task.completed / task.failed; `auto`: mọi trigger + tick (xem `WakeMode`). */
+  mode: WakeMode;
   log: Logger;
 }
 
@@ -48,14 +51,16 @@ export class WakeDispatcher {
     this.unsubscribers = [
       eventLog.onBusEvent((e) => this.onBusEvent(e)),
       target.onIdle((project) => this.tryFlush(project)),
-      // Turn đang chạy lúc orchestrator chết đã mất: nhắc nó dựng lại toàn cảnh.
-      target.onRestarted((project) => this.enqueue(project, { type: "tick" })),
       // Orchestrator dead / dừng: event đang giữ không còn nơi nhận; lần khởi động sau nó tự dựng lại toàn cảnh.
       target.onHealthChanged(({ project }) => {
         if (!target.acceptsWake(project)) this.drop(project);
       }),
     ];
-    // Bắt buộc giữ: ticket tạo tay trên Jira không có thông báo nào khác (mục 8).
+    // manual: orchestrator chỉ làm khi người dùng yêu cầu, không tự quét Jira / tự dựng lại việc khi không ai hỏi.
+    if (!this.isAuto()) return;
+    // Turn đang chạy lúc orchestrator chết đã mất: nhắc nó dựng lại toàn cảnh.
+    this.unsubscribers.push(target.onRestarted((project) => this.enqueue(project, { type: "tick" })));
+    // Bắt buộc giữ ở chế độ auto: ticket tạo tay trên Jira không có thông báo nào khác (mục 8).
     this.tickTimer = timers.setInterval(() => {
       for (const project of target.projects()) this.enqueue(project, { type: "tick" });
     }, this.deps.tickMs);
@@ -93,6 +98,10 @@ export class WakeDispatcher {
     if (p.window === null && p.events.length === 1) this.openWindow(project, p);
   }
 
+  private isAuto(): boolean {
+    return this.deps.mode === "auto";
+  }
+
   private drop(project: string): void {
     const p = this.pending.get(project);
     if (!p) return;
@@ -109,7 +118,7 @@ export class WakeDispatcher {
     };
     switch (event.type) {
       case "ticket.created": {
-        if (event.payload.has_agent_label !== true) return;
+        if (!this.isAuto() || event.payload.has_agent_label !== true) return;
         const project = byTicket();
         if (project && event.ticket_key) this.enqueue(project, { type: "ticket.created", ticket_key: event.ticket_key });
         return;
@@ -126,7 +135,8 @@ export class WakeDispatcher {
         return;
       }
       case "worker.registered": {
-        if (!event.worker_id) return;
+        // Runner đăng ký slot ngay khi khởi động: ở manual, đây không phải lý do để orchestrator tự nhận ticket.
+        if (!this.isAuto() || !event.worker_id) return;
         for (const project of projects) this.enqueue(project, { type: "worker.registered", worker_id: event.worker_id });
         return;
       }

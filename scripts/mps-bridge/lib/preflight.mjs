@@ -83,6 +83,16 @@ async function checkClaudeFlags(p) {
 }
 
 /**
+ * The only tool `prepare` needs (worktrees). Also part of checkTools.
+ * @returns {string | null} error, null when git is on PATH
+ */
+export function checkGit() {
+  return which("git") === null
+    ? "Không tìm thấy git trong PATH. Cài Git for Windows: https://git-scm.com/download/win rồi mở lại cửa sổ."
+    : null;
+}
+
+/**
  * @param {WorkspacePaths} p
  * @param {boolean} needPnpm true when a build is needed (pnpm runs through npx)
  * @returns {Promise<string[]>} errors
@@ -93,8 +103,9 @@ export async function checkTools(p, needPnpm) {
   if (major < MIN_NODE_MAJOR) {
     errors.push(`Cần Node.js >= ${MIN_NODE_MAJOR} (đang chạy ${process.version}).`);
   }
-  if (which("git") === null) {
-    errors.push("Không tìm thấy git trong PATH. Cài Git for Windows: https://git-scm.com/download/win rồi mở lại cửa sổ.");
+  const gitError = checkGit();
+  if (gitError !== null) {
+    errors.push(gitError);
   }
   if (which("claude") === null) {
     errors.push('Không tìm thấy claude trong PATH. Cài Claude Code, chạy "claude" một lần để đăng nhập, rồi mở lại cửa sổ.');

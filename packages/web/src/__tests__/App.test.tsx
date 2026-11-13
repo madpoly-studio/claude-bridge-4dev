@@ -20,7 +20,8 @@ describe("App (demo mode)", () => {
     expect(within(planner).getByRole("button", { name: "Duyệt và tạo ticket" })).toBeTruthy();
 
     const orch = screen.getByRole("region", { name: "Orchestrator" });
-    expect(within(orch).getByText("3 turn hệ thống")).toBeTruthy();
+    expect(within(orch).getByRole("note", { name: "Thông báo của bridge" }).textContent).toContain("Chế độ thủ công");
+    expect(within(orch).getAllByText("1 turn hệ thống")).toHaveLength(2);
     expect(within(orch).getByText("assign_task(w-sh-01, SH-129)")).toBeTruthy();
     expect(within(orch).getByText("SH-127, build_failed")).toBeTruthy();
 

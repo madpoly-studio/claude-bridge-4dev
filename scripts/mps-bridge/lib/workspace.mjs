@@ -11,7 +11,7 @@ const PAIRING_TOKEN_RE = /^[A-Za-z0-9_-]{16,}$/;
 const BOM = String.fromCharCode(0xfeff);
 const SETTINGS_TEMPLATE = "settings.template.json";
 const GUIDE_TEMPLATE = "HUONG-DAN.txt";
-const LAUNCHERS = Object.freeze(["start.cmd", "update.cmd"]);
+const LAUNCHERS = Object.freeze(["start.cmd", "prepare.cmd", "update.cmd"]);
 const CLI_ENTRY_PLACEHOLDER = "{{CLI_ENTRY}}";
 /** Non-ASCII, or a character cmd.exe expands or splits on inside quotes (`!` under EnableDelayedExpansion). */
 const UNSAFE_LAUNCHER_PART = /[^\x20-\x7e]|[%!^&"]/;
@@ -147,7 +147,7 @@ export function launcherCliEntry(root, cliEntry) {
 }
 
 /**
- * start.cmd / update.cmd (CRLF, ASCII only, no BOM) and HUONG-DAN.txt (UTF-8 with BOM, CRLF), rewritten when changed.
+ * start.cmd / prepare.cmd / update.cmd (CRLF, ASCII only, no BOM) and HUONG-DAN.txt (UTF-8 with BOM, CRLF), rewritten when changed.
  * @param {WorkspacePaths} p
  */
 export function writeLaunchers(p) {

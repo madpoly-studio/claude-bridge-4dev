@@ -13,6 +13,7 @@
   "heartbeat_lost_seconds": 45,
   "assign_start_timeout_seconds": 60,
   "wake_debounce_seconds": 10,
+  "wake_mode": "manual",
   "orch_tick_minutes": 10,
   "jira_poll_seconds": 60,
   "agent_label": "agent",

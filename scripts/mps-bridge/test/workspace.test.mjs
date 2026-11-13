@@ -63,7 +63,7 @@ describe("initWorkspace", () => {
   });
 
   it("writes .cmd launchers as CRLF, pure ASCII, starting in their own folder", () => {
-    for (const file of [p.startCmd, p.updateCmd]) {
+    for (const file of [p.startCmd, p.prepareCmd, p.updateCmd]) {
       const bytes = readFileSync(file);
       assert.ok(bytes.every((b) => b < 0x80), `${file} must be ASCII`);
       const text = bytes.toString("ascii");
@@ -75,6 +75,23 @@ describe("initWorkspace", () => {
     assert.ok(readFileSync(p.startCmd, "ascii").includes(`${entry} start --workspace "%~dp0."`));
     assert.ok(readFileSync(p.updateCmd, "ascii").includes(`${entry} update --workspace "%~dp0."`));
     assert.ok(!readFileSync(p.startCmd, "ascii").includes("{{"));
+  });
+
+  it("writes prepare.cmd: runs `prepare` on its own folder and always pauses so the result stays readable", () => {
+    const text = readFileSync(p.prepareCmd, "ascii");
+    const entry = `node "%~dp0${path.join("app", "scripts", "mps-bridge", "cli.mjs")}"`;
+    assert.ok(text.includes(`${entry} prepare --workspace "%~dp0."`));
+    assert.ok(!text.includes("{{"));
+    const lines = text.split("\r\n");
+    const pauseAt = lines.findIndex((l) => l.trim() === "pause");
+    assert.ok(pauseAt !== -1 && !/^\s/.test(lines[pauseAt]), "an unconditional pause, outside the if blocks");
+    assert.equal(lines[pauseAt + 1], "exit /b %RC%");
+  });
+
+  it("update brings prepare.cmd to an install that only had start.cmd and update.cmd", () => {
+    rmSync(p.prepareCmd);
+    initWorkspace(p);
+    assert.ok(readFileSync(p.prepareCmd, "ascii").includes('cli.mjs" prepare'));
   });
 
   it("writes HUONG-DAN.txt as UTF-8 with BOM and CRLF, workspace and app root substituted", () => {
@@ -99,9 +116,9 @@ describe("initWorkspace", () => {
 
   it("m2: launchers are not rewritten when their content is unchanged", () => {
     const old = new Date("2020-01-01T00:00:00Z");
-    for (const f of [p.startCmd, p.updateCmd, p.guide]) utimesSync(f, old, old);
+    for (const f of [p.startCmd, p.prepareCmd, p.updateCmd, p.guide]) utimesSync(f, old, old);
     initWorkspace(p);
-    for (const f of [p.startCmd, p.updateCmd, p.guide]) {
+    for (const f of [p.startCmd, p.prepareCmd, p.updateCmd, p.guide]) {
       assert.equal(statSync(f).mtime.getTime(), old.getTime(), `${f} was rewritten`);
     }
     writeFileSync(p.updateCmd, "stale");
