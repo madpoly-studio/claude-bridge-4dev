@@ -28,3 +28,6 @@ Thumbs.db
 bridge.config.json
 runner.config.json
 config/mcp/
+
+# Thư mục làm việc của launcher (settings, token, DB, worktree): node scripts/mps-bridge/setup.mjs tạo ra
+/ws/

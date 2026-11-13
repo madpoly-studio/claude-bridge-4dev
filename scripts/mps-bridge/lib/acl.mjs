@@ -33,7 +33,8 @@ function exec(file, args) {
 /**
  * Removes inherited permissions from `root` and grants full control to the current user, SYSTEM and Administrators
  * (inherited by everything below). Skipped when `root` already has no inherited entry, so re-running init does not
- * re-propagate through app\node_modules. Windows only; never throws.
+ * re-propagate through worktrees\. Applied to the workspace only, never to a custom worktrees_dir (a shared folder
+ * the user chose; no secret lives there). Windows only; never throws.
  * @param {string} root
  * @returns {Promise<string | null>} a Vietnamese warning, or null when the ACL is in place
  */

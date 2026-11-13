@@ -7,7 +7,7 @@ const input = {
   projectKey: "SH",
   baseBranch: "release/1.2",
   testCommands: ["npm test", "dotnet build:*"],
-  workspace: "D:/mps-claude-bridge",
+  workspace: "D:/claude-bridge/ws",
 };
 
 describe("renderWorkerFlow", () => {
@@ -48,7 +48,7 @@ describe("renderWorkerFlow", () => {
     const md = renderWorkerFlow(input);
     assert.ok(md.includes("Không đọc, tìm kiếm, liệt kê hay sửa bất kỳ thứ gì ngoài"));
     assert.ok(md.includes("`git diff --no-index`"));
-    assert.ok(md.includes("`D:/mps-claude-bridge` ngoài worktree của bạn"));
+    assert.ok(md.includes("`D:/claude-bridge/ws` ngoài worktree của bạn"));
   });
 
   it("lists the test commands as a person would type them, or says there are none", () => {

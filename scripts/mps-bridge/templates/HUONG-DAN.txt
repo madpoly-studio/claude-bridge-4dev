@@ -1,25 +1,31 @@
 HƯỚNG DẪN SỬ DỤNG CLAUDE-BRIDGE
 Thư mục làm việc: {{WORKSPACE}}
+Mã nguồn bridge: {{APP_ROOT}} (đừng sửa, đừng chạy git clean trong đó: xóa luôn thư mục này).
 
 1. THƯ MỤC GỒM GÌ
    settings.json   File DUY NHẤT bạn cần điền (Jira, project, repo, cổng, model).
    start.cmd       Chạy dịch vụ (backend + runner + giao diện web) trong một cửa sổ.
    update.cmd      Cập nhật claude-bridge lên bản mới nhất.
    HUONG-DAN.txt   File này.
-   app\            Mã nguồn claude-bridge (đừng sửa).
    generated\      Cấu hình sinh tự động từ settings.json. Bị xóa và ghi lại mỗi lần start: KHÔNG sửa tay.
    data\           Dữ liệu của dịch vụ, pairing token (data\pairing-token.txt) và file khóa mps-bridge.lock.
    orchestrators\  Thư mục làm việc của orchestrator, mỗi Jira project một thư mục.
-   worktrees\      Mỗi worker một git worktree riêng (tên dạng <repo>-01). Script không bao giờ tự xóa.
+   worktrees\      Mỗi worker một git worktree riêng (tên dạng <repo>-01), hoặc thư mục worktrees_dir nếu đặt
+                   trong settings.json. Script không bao giờ tự xóa.
    logs\           Log theo ngày: backend, runner, web, supervisor. Log cũ hơn 14 ngày tự xóa khi start.
-   Khi tạo lần đầu, quyền truy cập thư mục này bị giới hạn cho tài khoản Windows của bạn, SYSTEM và Administrators.
+   Khi tạo lần đầu, quyền truy cập thư mục này bị giới hạn cho tài khoản Windows của bạn, SYSTEM và Administrators
+   (không áp dụng cho thư mục worktrees_dir riêng: thư mục đó không chứa bí mật).
+   Thư mục này nằm trong bản clone bridge nhưng git bỏ qua nó. "git clean -fdx" trong bản clone sẽ XÓA LUÔN nó
+   (settings, token, dữ liệu, worktree): đừng chạy lệnh đó.
 
 2. LẦN ĐẦU
    a. Mở settings.json, thay mọi giá trị dạng <VIET_HOA> bằng giá trị thật, lưu lại.
       - Đường dẫn Windows viết bằng dấu / (D:/repos/sh-game) hoặc \\ (D:\\repos\\sh-game).
-      - Repo phải được clone sẵn và KHÔNG nằm trong {{WORKSPACE}}.
+      - Repo phải được clone sẵn và KHÔNG nằm trong {{WORKSPACE}} hay {{APP_ROOT}}.
       - Dùng một bản clone RIÊNG cho bridge (ví dụ D:/bridge-repos/sh-game), KHÔNG dùng bản clone bạn code hằng
         ngày: worker fetch, tạo nhánh và stash trong repo đó. start.cmd cảnh báo nếu repo có thay đổi chưa commit.
+      - worktrees_dir (tùy chọn): đặt sang một thư mục ngắn (ví dụ D:/wt) nếu repo có đường dẫn file dài (Unity),
+        nếu bản clone bridge nằm sâu, hoặc nếu thư mục cha có CLAUDE.md. Mỗi bridge một thư mục riêng.
    b. Chạy start.cmd. Nếu settings.json còn lỗi, cửa sổ liệt kê tất cả lỗi; sửa rồi chạy lại.
    c. Khi thấy khung "claude-bridge đang chạy": mở địa chỉ "Giao diện" (mặc định http://127.0.0.1:4173),
       dán pairing token, tick "Ghi nhớ trên máy này", bấm Kết nối.
@@ -34,7 +40,8 @@ Thư mục làm việc: {{WORKSPACE}}
 
 4. CẬP NHẬT
    Dừng dịch vụ trước (mục 3), rồi chạy update.cmd. Xong thì chạy lại start.cmd.
-   update.cmd từ chối chạy khi dịch vụ còn chạy, hoặc khi app\ có thay đổi chưa commit.
+   update.cmd từ chối chạy khi dịch vụ còn chạy, hoặc khi bản clone bridge ({{APP_ROOT}}) có thay đổi chưa commit
+   hay không ở nhánh main. Nên dùng một bản clone RIÊNG để chạy bridge, không code trên đó.
 
 5. LỖI THƯỜNG GẶP
    - "Cổng ... đang bị chiếm": dịch vụ đang chạy ở cửa sổ khác; đóng nó, hoặc đổi ports trong settings.json.
@@ -59,6 +66,19 @@ Thư mục làm việc: {{WORKSPACE}}
      Nếu chắc chắn không còn, xóa data\mps-bridge.lock.
    - "Không khóa được quyền truy cập ...": chỉ là cảnh báo; đừng chia sẻ thư mục này cho người khác.
    - "Worktree thừa": slot không còn dùng (giảm workers hoặc đổi tên repo); xóa bằng lệnh git worktree remove được in ra.
+   - "worktrees_dir: ...": sửa worktrees_dir trong settings.json theo thông báo (thư mục riêng, ngoài mọi repo và
+     ngoài bản clone bridge, ví dụ D:/wt), hoặc đặt null để dùng worktrees\ mặc định.
+   - "Worktree cũ ... nằm ngoài thư mục worktree hiện tại": đã đổi worktrees_dir hoặc chuyển chỗ cài bridge. Kiểm
+     tra worktree cũ không còn việc dở rồi xóa bằng lệnh git worktree remove được in ra. Worktree cũ còn giữ nhánh
+     thì worker cần nhánh đó sẽ lỗi "already checked out".
+   - "Repo ... còn đăng ký worktree ... nhưng thư mục đã bị xóa": chạy lệnh git worktree prune được in ra.
+   - "... sát giới hạn 260 ký tự của Windows": đặt worktrees_dir sang thư mục ngắn (ví dụ D:/wt) và chạy
+     git config --global core.longpaths true.
+   - "... CLAUDE.md nằm ở thư mục cha ...": mọi worker và orchestrator nạp file đó như hướng dẫn của dự án.
+     Di chuyển/xóa nó, hoặc đặt bridge (và worktrees_dir) ở chỗ không có CLAUDE.md phía trên.
+   - "Mã nguồn bridge ... không phải git clone": lấy bridge bằng "git clone" rồi chạy setup trong bản clone đó.
+   - "Bản clone ... có thay đổi chưa commit" / "đang ở nhánh ...": dọn bản clone bridge (git status, checkout main)
+     rồi chạy lại update.cmd.
    - "runner từ chối cấu hình sinh ra": lỗi của mps-bridge, báo người bảo trì kèm logs\runner-*.log.
 
 6. MẸO

@@ -5,17 +5,30 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { isPathInside } from "../lib/paths.mjs";
 import { parseSettingsFile, parseSettingsText, validateSettings } from "../lib/settings.mjs";
-import { CA_FILE, REPO_A, REPO_B, WORKSPACE, abs, fakeFs, validRaw } from "./helpers.mjs";
+import { APP_ROOT_FAKE, CA_FILE, REPO_A, REPO_B, WORKSPACE, abs, fakeFs, validRaw } from "./helpers.mjs";
 
-const ctx = (fs = fakeFs()) => ({ workspace: WORKSPACE, fs });
+const ctx = (fs = fakeFs()) => ({ workspace: WORKSPACE, appRoot: APP_ROOT_FAKE, fs });
 
-/** @param {(raw: any) => void} mutate */
-function errorsFor(mutate, fs) {
+/** Layout of an install made before ws\ existed: the checkout sits in <workspace>\app. */
+const OLD_WS = abs("old-bridge");
+const oldLayout = () => ({ workspace: OLD_WS, appRoot: path.join(OLD_WS, "app"), fs: fakeFs() });
+
+/** @param {(raw: any) => void} mutate @param {any} [fs] @param {any} [context] */
+function errorsFor(mutate, fs, context = ctx(fs)) {
   const raw = validRaw();
   mutate(raw);
-  const result = validateSettings(raw, ctx(fs));
+  const result = validateSettings(raw, context);
   assert.equal(result.settings, null, "invalid settings must yield settings = null");
   return result.errors;
+}
+
+/** @param {unknown} value @param {any} [context] */
+function worktreesDirOf(value, context = ctx()) {
+  const raw = validRaw();
+  raw.worktrees_dir = value;
+  const r = validateSettings(raw, context);
+  assert.deepEqual(r.errors, []);
+  return r.settings?.worktrees_dir;
 }
 
 /** @param {string[]} errors @param {string} needle */
@@ -132,10 +145,23 @@ describe("validateSettings: error catalogue", () => {
     ["S39 dotdot", (r) => { r.repos[0].base_branch = "a..b"; }, "không phải tên nhánh hợp lệ"],
     ["S40", (r) => { r.repos[0].workers = 0; }, "repos[0].workers: Phải là số nguyên ≥ 1."],
     ["S41", (r) => { r.repos[0].allowed_bash = ["npm test", " "]; }, "repos[0].allowed_bash[1]: Phải là chuỗi lệnh không rỗng"],
+    ["S42", (r) => { r.repos[0].path = abs("bridge-app", "repos", "x"); }, "repos[0].path: Repo nằm bên trong mã nguồn bridge"],
     ["S50", (r) => { r.models.worker = 3; }, "models.worker: Phải là tên model (chuỗi) hoặc null."],
     ["S51", (r) => { r.ports.web = 80; }, "ports.web: Phải là số nguyên từ 1024 đến 65535."],
     ["S52", (r) => { r.ports.web = 8787; }, "ports: bridge và web không được trùng cổng."],
     ["S53", (r) => { r.max_concurrency = 0; }, "max_concurrency: Phải là số nguyên ≥ 1 hoặc null."],
+    ["S06 worktrees_dir", (r) => { r.worktrees_dir = 5; }, "worktrees_dir: Phải là chuỗi hoặc null."],
+    ["S04 worktrees_dir", (r) => { r.worktrees_dir = "<THU_MUC_WORKTREE>"; }, "worktrees_dir: Còn giá trị mẫu"],
+    ["S60", (r) => { r.worktrees_dir = "wt"; }, "worktrees_dir: Phải là đường dẫn tuyệt đối (ví dụ D:/wt)."],
+    ["S62 equal", (r) => { r.worktrees_dir = WORKSPACE; }, "worktrees_dir: Không được trùng hoặc chứa thư mục làm việc"],
+    ["S62 ancestor", (r) => { r.worktrees_dir = abs(); }, "worktrees_dir: Không được trùng hoặc chứa thư mục làm việc"],
+    ["S64 generated", (r) => { r.worktrees_dir = path.join(WORKSPACE, "generated", "wt"); }, "worktrees_dir: Không được nằm trong"],
+    ["S64 data", (r) => { r.worktrees_dir = path.join(WORKSPACE, "data"); }, "do bridge tự quản lý"],
+    ["S64 logs", (r) => { r.worktrees_dir = path.join(WORKSPACE, "logs", "wt"); }, "do bridge tự quản lý"],
+    ["S64 orchestrators", (r) => { r.worktrees_dir = path.join(WORKSPACE, "orchestrators", "wt"); }, "do bridge tự quản lý"],
+    ["S65", (r) => { r.worktrees_dir = abs("bridge-app", "wt"); }, "worktrees_dir: Nằm trong mã nguồn bridge"],
+    ["S66", (r) => { r.worktrees_dir = path.join(REPO_A, "wt"); }, "worktrees_dir: Nằm bên trong repo sh-game"],
+    ["S67", (r) => { r.worktrees_dir = abs("repos"); }, "worktrees_dir: Chứa repo sh-game"],
   ];
   for (const [id, mutate, needle] of cases) {
     it(id, () => {
@@ -148,6 +174,33 @@ describe("validateSettings: error catalogue", () => {
       assertHas(errorsFor(mutate), needle);
     });
   }
+
+  it("S43 when the bridge checkout is inside the repo", () => {
+    const context = { workspace: abs("elsewhere", "ws"), appRoot: path.join(REPO_A, "tools", "bridge"), fs: fakeFs() };
+    assertHas(errorsFor(() => {}, undefined, context), "repos[0].path: Mã nguồn bridge");
+  });
+
+  it("S61 when worktrees_dir is an existing file", () => {
+    const file = abs("wt.txt");
+    assertHas(errorsFor((r) => { r.worktrees_dir = file; }, fakeFs({ files: [file] })), "đã tồn tại nhưng không phải thư mục");
+  });
+
+  it("S63 when worktrees_dir is the checkout of an old install (checkout inside the workspace)", () => {
+    const context = oldLayout();
+    assertHas(errorsFor((r) => { r.worktrees_dir = context.appRoot; }, undefined, context), "Không được trùng hoặc chứa mã nguồn bridge");
+  });
+
+  it("S65 in an old install: inside <workspace>\\app is rejected although it is inside the workspace", () => {
+    const context = oldLayout();
+    const inside = path.join(context.appRoot, "wt");
+    assertHas(errorsFor((r) => { r.worktrees_dir = inside; }, undefined, context), "Nằm trong mã nguồn bridge");
+    assert.equal(worktreesDirOf(path.join(OLD_WS, "wt2"), context), path.join(OLD_WS, "wt2"));
+  });
+
+  it("S66/S67 are skipped when repos is invalid", () => {
+    const errors = errorsFor((r) => { r.repos = []; r.worktrees_dir = abs("repos"); });
+    assert.ok(!errors.some((e) => e.startsWith("worktrees_dir")), errors.join("\n"));
+  });
 
   it("S35 when the folder has no .git", () => {
     const noGit = abs("repos", "plain");
@@ -194,5 +247,27 @@ describe("containment", () => {
 
   it("S36 matches a differently-cased repo path on Windows", { skip: process.platform !== "win32" }, () => {
     assertHas(errorsFor((r) => { r.repos[0].path = path.join(WORKSPACE.toUpperCase(), "x"); }), "Repo nằm bên trong thư mục làm việc");
+  });
+
+  it("S64 and S66 match differently-cased worktrees_dir paths on Windows", { skip: process.platform !== "win32" }, () => {
+    assertHas(errorsFor((r) => { r.worktrees_dir = path.join(WORKSPACE.toUpperCase(), "GENERATED", "x"); }), "do bridge tự quản lý");
+    assertHas(errorsFor((r) => { r.worktrees_dir = path.join(REPO_A.toUpperCase(), "wt"); }), "Nằm bên trong repo sh-game");
+  });
+});
+
+describe("validateSettings: worktrees_dir", () => {
+  it("missing, null or blank means the default (<workspace>\\worktrees)", () => {
+    assert.equal(worktreesDirOf(undefined), null);
+    assert.equal(worktreesDirOf(null), null);
+    assert.equal(worktreesDirOf("  "), null);
+  });
+
+  it("an absolute folder outside everything is resolved and kept", () => {
+    assert.equal(worktreesDirOf(abs("wt").replace(/\\/g, "/")), abs("wt"));
+  });
+
+  it("allowed under the workspace, outside the folders the bridge manages", () => {
+    const inWs = path.join(WORKSPACE, "worktrees", "x");
+    assert.equal(worktreesDirOf(inWs), inWs);
   });
 });

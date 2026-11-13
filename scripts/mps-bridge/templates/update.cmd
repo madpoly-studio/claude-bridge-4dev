@@ -5,7 +5,7 @@ where node >nul 2>nul || (echo [LOI] Khong tim thay Node.js trong PATH. Cai Node
 rem update rewrites this file when the template changed. cmd.exe reads a batch file by offset, so everything after
 rem the update runs from this one parenthesized block, which is parsed before node starts.
 (
-  node app\scripts\mps-bridge\cli.mjs update --workspace "%~dp0."
+  node {{CLI_ENTRY}} update --workspace "%~dp0."
   set "RC=!ERRORLEVEL!"
   if not "!RC!"=="0" (
     echo.

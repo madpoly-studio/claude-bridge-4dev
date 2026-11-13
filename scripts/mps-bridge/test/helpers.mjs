@@ -8,7 +8,9 @@ export function abs(...parts) {
   return path.resolve(DRIVE_ROOT, ...parts);
 }
 
-export const WORKSPACE = abs("mps-claude-bridge");
+/** A bridge checkout that is not this one: containment rules must not depend on where the tests run. */
+export const APP_ROOT_FAKE = abs("bridge-app");
+export const WORKSPACE = abs("bridge-app", "ws");
 export const REPO_A = abs("repos", "sh-game");
 export const REPO_B = abs("repos", "sh-tools");
 export const CA_FILE = abs("certs", "corp.pem");

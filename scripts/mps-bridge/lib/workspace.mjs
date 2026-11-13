@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { constants as fsConstants, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { EXIT, UserError } from "./errors.mjs";
-import { isPathInside } from "./paths.mjs";
+import { WORKSPACE_DIR_NAME, canonicalPath, isPathInside, samePath } from "./paths.mjs";
 
 /** 24 bytes → 32 base64url characters (the backend requires at least 16). */
 const PAIRING_TOKEN_BYTES = 24;
@@ -12,6 +12,11 @@ const BOM = String.fromCharCode(0xfeff);
 const SETTINGS_TEMPLATE = "settings.template.json";
 const GUIDE_TEMPLATE = "HUONG-DAN.txt";
 const LAUNCHERS = Object.freeze(["start.cmd", "update.cmd"]);
+const CLI_ENTRY_PLACEHOLDER = "{{CLI_ENTRY}}";
+/** Non-ASCII, or a character cmd.exe expands or splits on inside quotes (`!` under EnableDelayedExpansion). */
+const UNSAFE_LAUNCHER_PART = /[^\x20-\x7e]|[%!^&"]/;
+/** cli.mjs sits at <app root>\scripts\mps-bridge\cli.mjs. */
+const CLI_ENTRY_DEPTH = 3;
 const LOG_NAME_RE = /^[a-z]+-(\d{4})(\d{2})(\d{2})\.log$/;
 const DAY_MS = 86_400_000;
 
@@ -44,7 +49,7 @@ function readTemplate(p, name) {
  * @returns {{ createdSettings: boolean, createdToken: boolean }}
  */
 export function initWorkspace(p) {
-  for (const dir of [p.app, p.generatedMcp, p.generatedFlow, p.data, p.orchestrators, p.worktrees, p.logs]) {
+  for (const dir of [p.generatedMcp, p.generatedFlow, p.data, p.orchestrators, p.worktrees, p.logs]) {
     mkdirSync(dir, { recursive: true });
   }
   const template = path.join(p.templatesDir, SETTINGS_TEMPLATE);
@@ -103,18 +108,58 @@ function writeIfChanged(file, content) {
 }
 
 /**
+ * Quoted node entry for the .cmd templates. Relative to the launcher folder (`%~dp0` expands at run time, so a
+ * non-ASCII parent folder still works): "%~dp0..\scripts\mps-bridge\cli.mjs" for the default <clone>\ws, and
+ * "%~dp0app\scripts\mps-bridge\cli.mjs" for an install made before ws\ existed. Absolute across volumes and when
+ * the workspace path goes through a junction or symlink.
+ * @param {string} root workspace root (where the launchers live)
+ * @param {string} cliEntry absolute path of cli.mjs
+ * @returns {string}
+ */
+export function launcherCliEntry(root, cliEntry) {
+  // update.cmd runs under EnableDelayedExpansion: a "!" inside the %~dp0 value is eaten after percent expansion.
+  if (root.includes("!")) {
+    throw new UserError(
+      `Không tạo được start.cmd/update.cmd: đường dẫn ${root} có ký tự "!" (update.cmd sẽ đọc sai). ` +
+        'Clone bridge vào thư mục không có "!" rồi chạy lại setup.',
+      EXIT.ENVIRONMENT,
+    );
+  }
+  // %~dp0 is the folder as cmd.exe was given it, not its resolved form: through a junction or symlink, ".." from it
+  // is not ".." from the canonical folder, so only a root without links gets the relative form.
+  const rootCanonical = canonicalPath(root);
+  const rel = path.relative(rootCanonical, canonicalPath(cliEntry));
+  const relative = !path.isAbsolute(rel) && samePath(rootCanonical, path.resolve(root));
+  const part = relative ? rel : cliEntry;
+  if (UNSAFE_LAUNCHER_PART.test(part)) {
+    let appRoot = cliEntry;
+    for (let i = 0; i < CLI_ENTRY_DEPTH; i++) {
+      appRoot = path.dirname(appRoot);
+    }
+    throw new UserError(
+      `Không tạo được start.cmd/update.cmd: đường dẫn tới cli.mjs (${part}) có ký tự không phải ASCII hoặc một trong ` +
+        `% ! ^ & " (cmd.exe sẽ đọc sai). Đặt thư mục làm việc ở ${path.join(appRoot, WORKSPACE_DIR_NAME)} (mặc định) ` +
+        "hoặc clone bridge vào đường dẫn chỉ gồm chữ không dấu.",
+      EXIT.ENVIRONMENT,
+    );
+  }
+  return relative ? `"%~dp0${rel}"` : `"${cliEntry}"`;
+}
+
+/**
  * start.cmd / update.cmd (CRLF, ASCII only, no BOM) and HUONG-DAN.txt (UTF-8 with BOM, CRLF), rewritten when changed.
  * @param {WorkspacePaths} p
  */
 export function writeLaunchers(p) {
+  const cliEntry = launcherCliEntry(p.root, p.cliEntry);
   for (const name of LAUNCHERS) {
-    const text = toCrlf(readTemplate(p, name));
+    const text = toCrlf(readTemplate(p, name)).split(CLI_ENTRY_PLACEHOLDER).join(cliEntry);
     if (!/^[\x00-\x7f]*$/.test(text)) {
       throw new UserError(`File mẫu ${name} chứa ký tự không phải ASCII: cmd.exe sẽ đọc sai. Báo người bảo trì.`, EXIT.ENVIRONMENT);
     }
     writeIfChanged(path.join(p.root, name), Buffer.from(text, "ascii"));
   }
-  const guide = readTemplate(p, GUIDE_TEMPLATE).split("{{WORKSPACE}}").join(p.root);
+  const guide = readTemplate(p, GUIDE_TEMPLATE).split("{{WORKSPACE}}").join(p.root).split("{{APP_ROOT}}").join(p.app);
   writeIfChanged(p.guide, Buffer.from(BOM + toCrlf(guide.startsWith(BOM) ? guide.slice(1) : guide), "utf8"));
 }
 

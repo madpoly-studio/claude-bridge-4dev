@@ -2,15 +2,15 @@
 // mps-bridge launcher: `init | start | update [--workspace <dir>]`. Orders the steps and maps errors to exit codes;
 // every rule lives in lib/.
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { lockDownWorkspaceAcl } from "./lib/acl.mjs";
 import { buildApp, checkAppRepo, installApp, pullApp } from "./lib/app-repo.mjs";
 import { EXIT, UserError } from "./lib/errors.mjs";
 import { buildWorkspaceFiles } from "./lib/generate.mjs";
 import { acquireWorkspaceLock } from "./lib/lock.mjs";
-import { resolveWorkspace, workspacePaths } from "./lib/paths.mjs";
-import { checkPorts, checkTools, readPortsLoosely, warmUpJiraMcp } from "./lib/preflight.mjs";
+import { assertWorkspaceLocation, resolveWorkspace, withWorktreesRoot, workspacePaths } from "./lib/paths.mjs";
+import { appDevSecretsWarning, appJiraEnvFile, checkPorts, checkTools, readPortsLoosely, warmUpJiraMcp } from "./lib/preflight.mjs";
 import { cleanChildEnv } from "./lib/proc.mjs";
 import {
   WEB_UI_DEFAULT_BRIDGE_PORT,
@@ -47,6 +47,7 @@ function warn(line) {
 async function cmdInit(p) {
   const { createdSettings, createdToken } = initWorkspace(p);
   console.log(`Thư mục làm việc: ${p.root}`);
+  console.log(`Mã nguồn bridge: ${p.app}`);
   console.log(createdSettings ? `  Đã tạo ${p.settings} (mẫu cần điền).` : `  Giữ nguyên ${p.settings}.`);
   console.log(createdToken ? `  Đã tạo pairing token: ${p.pairingTokenFile}` : "  Giữ nguyên pairing token.");
   console.log(`  Đã ghi ${p.startCmd}, ${p.updateCmd}, ${p.guide}`);
@@ -70,7 +71,7 @@ function loadSettings(p) {
   }
   const parsed = parseSettingsFile(p.settings);
   const result = parsed.ok
-    ? validateSettings(parsed.raw, { workspace: p.root, fs: realFs })
+    ? validateSettings(parsed.raw, { workspace: p.root, appRoot: p.app, fs: realFs })
     : { errors: [parsed.error], warnings: [], settings: null };
   if (result.settings === null) {
     const lines = [`settings.json có ${result.errors.length} lỗi cần sửa (${p.settings}):`];
@@ -126,13 +127,19 @@ function banner(settings, token) {
 }
 
 /**
- * @param {WorkspacePaths} p
+ * @param {WorkspacePaths} base
  * @returns {Promise<number>}
  */
-async function cmdStart(p) {
-  const settings = loadSettings(p);
+async function cmdStart(base) {
+  const settings = loadSettings(base);
+  // Single source of the effective worktrees root for everything below (generated configs and worktree setup).
+  const p = withWorktreesRoot(base, settings.worktrees_dir);
   // Held until this process exits: a second start/update must not rewrite generated/ under a live runner.
   acquireWorkspaceLock(p.data, "start");
+  const devSecrets = appDevSecretsWarning(p.app);
+  if (devSecrets !== null) {
+    warn(devSecrets);
+  }
 
   const portErrors = await checkPorts([
     { name: "bridge", port: settings.ports.bridge },
@@ -157,10 +164,19 @@ async function cmdStart(p) {
   }
 
   const token = readOrCreatePairingToken(p);
-  const files = buildWorkspaceFiles(settings, p, token);
+  const devJiraEnv = appJiraEnvFile(p.app);
+  const files = buildWorkspaceFiles(settings, p, token, devJiraEnv === null ? [] : [devJiraEnv]);
   writeGenerated(p, files);
 
   console.log("Đang chuẩn bị worktree cho worker…");
+  try {
+    mkdirSync(p.worktrees, { recursive: true });
+  } catch (err) {
+    throw new UserError(
+      `Không tạo được thư mục worktree ${p.worktrees} (${/** @type {Error} */ (err).message}). Kiểm tra worktrees_dir trong settings.json.`,
+      EXIT.ENVIRONMENT,
+    );
+  }
   const report = await ensureWorktrees(files.worktrees, p);
   report.created.forEach((wt) => console.log(`  Đã tạo worktree ${wt}`));
   report.warnings.forEach(warn);
@@ -219,7 +235,7 @@ async function cmdUpdate(p) {
   }
   const repoErrors = await checkAppRepo(p.app);
   if (repoErrors.length > 0) {
-    throw new UserError("Không cập nhật được app\\:", EXIT.ENVIRONMENT, repoErrors);
+    throw new UserError(`Không cập nhật được mã nguồn bridge (${p.app}):`, EXIT.ENVIRONMENT, repoErrors);
   }
   console.log("Đang tải bản mới (git pull)…");
   await pullApp(p.app);
@@ -256,6 +272,7 @@ async function main() {
   }
   const p = workspacePaths(resolveWorkspace(parsed.values.workspace));
   try {
+    assertWorkspaceLocation(p.root, p.app);
     if (command === "init") {
       return await cmdInit(p);
     }

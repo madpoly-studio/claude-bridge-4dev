@@ -11,16 +11,16 @@ import {
 } from "../lib/generate.mjs";
 import { workspacePaths } from "../lib/paths.mjs";
 import { validateSettings } from "../lib/settings.mjs";
-import { CA_FILE, REPO_B, WORKSPACE, fakeFs, validRaw } from "./helpers.mjs";
+import { APP_ROOT_FAKE, CA_FILE, REPO_B, WORKSPACE, fakeFs, validRaw } from "./helpers.mjs";
 
 const TOKEN = "abcdefghijklmnopqrstuvwxyz012345";
-const paths = workspacePaths(WORKSPACE);
+const paths = workspacePaths(WORKSPACE, APP_ROOT_FAKE);
 
 /** @param {(raw: any) => void} [mutate] */
 function build(mutate = () => {}) {
   const raw = validRaw();
   mutate(raw);
-  const r = validateSettings(raw, { workspace: WORKSPACE, fs: fakeFs() });
+  const r = validateSettings(raw, { workspace: WORKSPACE, appRoot: APP_ROOT_FAKE, fs: fakeFs() });
   assert.deepEqual(r.errors, []);
   return buildWorkspaceFiles(/** @type {any} */ (r.settings), paths, TOKEN);
 }
@@ -124,21 +124,46 @@ describe("helpers", () => {
 
 describe("workspace secret deny rules (M2)", () => {
   it("permissionPath uses the //<drive>/ POSIX form verified on Claude Code 2.1.322", () => {
-    assert.equal(permissionPath("D:" + String.fromCharCode(92) + "mps-claude-bridge" + String.fromCharCode(92) + "settings.json"),
-      "//d/mps-claude-bridge/settings.json");
+    assert.equal(permissionPath("D:" + String.fromCharCode(92) + "bridge" + String.fromCharCode(92) + "ws" + String.fromCharCode(92) + "settings.json"),
+      "//d/bridge/ws/settings.json");
     assert.equal(permissionPath("C:/Users/Me/ws"), "//c/Users/Me/ws");
     assert.equal(permissionPath("/home/me/ws"), "//home/me/ws");
   });
 
-  it("denies Read and Edit of settings.json, generated/, data/ and logs/ for every slot", () => {
+  it("denies Read and Edit of the workspace secrets and the checkout's dev secrets for every slot", () => {
     const rules = workspaceSecretRules(paths);
     const root = permissionPath(WORKSPACE);
-    const targets = [`${root}/settings.json`, `${root}/generated/**`, `${root}/data/**`, `${root}/logs/**`];
+    const app = permissionPath(APP_ROOT_FAKE);
+    const targets = [
+      `${root}/settings.json`,
+      `${root}/generated/**`,
+      `${root}/data/**`,
+      `${root}/logs/**`,
+      `${app}/bridge.config.json`,
+      `${app}/runner.config.json`,
+      `${app}/.env`,
+      `${app}/config/mcp/**`,
+      `${app}/data/**`,
+      `${app}/.env.*`,
+    ];
     assert.deepEqual(rules, [...targets.map((t) => `Read(${t})`), ...targets.map((t) => `Edit(${t})`)]);
     assert.ok(!rules.some((r) => r.startsWith("Write(")), "Write(...) rules are ineffective on 2.1.322; Edit(...) covers Write");
     for (const slot of /** @type {any} */ (build().runnerConfig).slots) {
       for (const rule of rules) assert.ok(slot.disallowed_tools.includes(rule), rule);
     }
+  });
+
+  it("n4: denies a dev jira_env_file found in the checkout, in every slot", () => {
+    const teamEnv = path.join(APP_ROOT_FAKE, "config", "team.env");
+    const rules = workspaceSecretRules(paths, [teamEnv]);
+    const target = permissionPath(teamEnv);
+    assert.ok(rules.includes(`Read(${target})`) && rules.includes(`Edit(${target})`));
+    const { settings } = validateSettings(validRaw(), { workspace: WORKSPACE, appRoot: APP_ROOT_FAKE, fs: fakeFs() });
+    const files = buildWorkspaceFiles(/** @type {any} */ (settings), paths, TOKEN, [teamEnv]);
+    for (const slot of /** @type {any} */ (files.runnerConfig).slots) {
+      assert.ok(slot.disallowed_tools.includes(`Read(${target})`));
+    }
+    assert.ok(!workspaceSecretRules(paths).some((r) => r.includes("team.env")), "nothing extra by default");
   });
 
   it("the worker flow names the workspace it must stay out of", () => {

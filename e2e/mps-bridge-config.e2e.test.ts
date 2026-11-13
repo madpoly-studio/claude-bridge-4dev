@@ -12,7 +12,7 @@ import { buildClaudeArgs } from "../packages/runner/src/claudeInvocation.js";
 import { TASK_PHASES, WORKER_FAIL_CATEGORIES } from "../packages/protocol/src/entities.js";
 import { buildWorkspaceFiles } from "../scripts/mps-bridge/lib/generate.mjs";
 import { validateSettings, realFs } from "../scripts/mps-bridge/lib/settings.mjs";
-import { workspacePaths } from "../scripts/mps-bridge/lib/paths.mjs";
+import { withWorktreesRoot, workspacePaths } from "../scripts/mps-bridge/lib/paths.mjs";
 import { writeGenerated } from "../scripts/mps-bridge/lib/workspace.mjs";
 
 const TOKEN = "e2e-pairing-token-0123456789abcdef";
@@ -28,9 +28,11 @@ function gitRepo(name: string): string {
 
 /** Validates `raw`, generates the workspace files and writes them; returns everything the assertions need. */
 function generate(raw: Record<string, unknown>) {
-  const p = workspacePaths(join(dir, "ws"));
-  const result = validateSettings(raw, { workspace: p.root, fs: realFs });
+  const base = workspacePaths(join(dir, "ws"));
+  const result = validateSettings(raw, { workspace: base.root, appRoot: base.app, fs: realFs });
   expect(result.errors).toEqual([]);
+  // Same rebinding as cmdStart: worktrees_dir replaces the worktrees root.
+  const p = withWorktreesRoot(base, result.settings!.worktrees_dir);
   const files = buildWorkspaceFiles(result.settings!, p, TOKEN);
   writeGenerated(p, files);
   const bridgeJson = JSON.parse(readFileSync(p.bridgeConfig, "utf8"));
@@ -112,6 +114,28 @@ describe("mps-bridge generated configs", () => {
     expect(flows).toHaveLength(2);
     for (const md of flows) {
       for (const word of [...TASK_PHASES, ...WORKER_FAIL_CATEGORIES]) expect(md).toContain(word);
+    }
+  });
+
+  it("worktrees_dir: the runner accepts slots whose worktree_path is under it; unset keeps <ws>\\worktrees", () => {
+    const repo = gitRepo("sh-game");
+    const wt = join(dir, "wt");
+    const custom = generate({
+      jira: { url: "https://jira.example.com", personal_token: "pat-123" },
+      projects: ["SH"],
+      repos: [{ name: "sh-game", path: repo, project_key: "SH", base_branch: "develop", workers: 2 }],
+      worktrees_dir: wt,
+    });
+    expect(custom.runner.slots).toHaveLength(2);
+    for (const slot of custom.runner.slots) expect(slot.worktree_path.startsWith(join(wt, "sh-game-"))).toBe(true);
+
+    const fallback = generate({
+      jira: { url: "https://jira.example.com", personal_token: "pat-123" },
+      projects: ["SH"],
+      repos: [{ name: "sh-game", path: repo, project_key: "SH", base_branch: "develop" }],
+    });
+    for (const slot of fallback.runner.slots) {
+      expect(slot.worktree_path.startsWith(join(fallback.p.root, "worktrees", "sh-game-"))).toBe(true);
     }
   });
 

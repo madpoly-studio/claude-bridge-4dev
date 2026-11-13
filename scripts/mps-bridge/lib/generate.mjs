@@ -69,18 +69,36 @@ export function permissionPath(absPath) {
 }
 
 /**
+ * Secrets of the developer workflow (README "Cấu hình") that may sit, gitignored, in the bridge checkout. Workers run
+ * below it in the default layout (<checkout>\ws\worktrees), so the checkout is one of their parent folders.
+ * Relative to the checkout root, "/" separated.
+ */
+export const APP_DEV_SECRET_FILES = Object.freeze(["bridge.config.json", "runner.config.json", ".env"]);
+export const APP_DEV_SECRET_DIRS = Object.freeze(["config/mcp", "data"]);
+/** ".env.local", ".env.production", …: the gitignore ignores ".env.*". */
+export const APP_DEV_ENV_PREFIX = ".env.";
+
+/**
  * Deny rules that keep workers away from the workspace secrets (Jira PAT in settings.json and generated/, tokens in
- * data/ and logs/). Read(...) also covers Grep/Glob; Edit(...) covers every file-writing tool. Write(...) rules are not
- * used: on 2.1.322 they did not stop the Write tool, while Edit(...) did.
+ * data/ and logs/) and from the developer-workflow secrets in the bridge checkout. Read(...) also covers Grep/Glob;
+ * Edit(...) covers every file-writing tool. Write(...) rules are not used: on 2.1.322 they did not stop the Write
+ * tool, while Edit(...) did.
  * @param {WorkspacePaths} paths
+ * @param {string[]} [appSecretFiles] more absolute secret files in the checkout (the dev jira_env_file, read by
+ *   preflight.mjs appJiraEnvFile: this module stays a pure projection)
  * @returns {string[]}
  */
-export function workspaceSecretRules(paths) {
+export function workspaceSecretRules(paths, appSecretFiles = []) {
+  const app = permissionPath(paths.app);
   const targets = [
     permissionPath(paths.settings),
     `${permissionPath(paths.generated)}/**`,
     `${permissionPath(paths.data)}/**`,
     `${permissionPath(paths.logs)}/**`,
+    ...APP_DEV_SECRET_FILES.map((f) => `${app}/${f}`),
+    ...APP_DEV_SECRET_DIRS.map((d) => `${app}/${d}/**`),
+    `${app}/${APP_DEV_ENV_PREFIX}*`,
+    ...appSecretFiles.map(permissionPath),
   ];
   return ["Read", "Edit"].flatMap((tool) => targets.map((t) => `${tool}(${t})`));
 }
@@ -183,13 +201,14 @@ function buildBridgeConfig(settings, paths, pairingToken) {
 /**
  * @param {Settings} settings
  * @param {WorkspacePaths} paths
+ * @param {string[]} appSecretFiles
  * @returns {{ runnerConfig: RunnerConfigJson, worktrees: WorktreeSpec[] }}
  */
-function buildRunnerConfig(settings, paths) {
+function buildRunnerConfig(settings, paths, appSecretFiles) {
   const slots = [];
   /** @type {WorktreeSpec[]} */
   const worktrees = [];
-  const disallowed = [...WORKER_DISALLOWED_TOOLS, ...workspaceSecretRules(paths)];
+  const disallowed = [...WORKER_DISALLOWED_TOOLS, ...workspaceSecretRules(paths, appSecretFiles)];
   for (const repo of settings.repos) {
     const allowed = [...new Set([...WORKER_BASE_TOOLS, ...repo.allowed_bash.map(bashRule), ...WORKER_JIRA_TOOLS])];
     const extraArgs = [
@@ -231,10 +250,11 @@ function buildRunnerConfig(settings, paths) {
  * @param {Settings} settings validated settings
  * @param {WorkspacePaths} paths
  * @param {string} pairingToken
+ * @param {string[]} [appSecretFiles] see workspaceSecretRules
  * @returns {WorkspaceFiles}
  */
-export function buildWorkspaceFiles(settings, paths, pairingToken) {
-  const { runnerConfig, worktrees } = buildRunnerConfig(settings, paths);
+export function buildWorkspaceFiles(settings, paths, pairingToken, appSecretFiles = []) {
+  const { runnerConfig, worktrees } = buildRunnerConfig(settings, paths, appSecretFiles);
   /** @type {Record<string, string>} */
   const workerFlows = {};
   for (const repo of settings.repos) {

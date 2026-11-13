@@ -53,7 +53,7 @@ pnpm install
 pnpm build          # protocol → backend, runner, web
 ```
 
-## Cài nhanh trên Windows (D:\mps-claude-bridge)
+## Cài nhanh trên Windows
 
 Cách dành cho người dùng: chỉ điền **một file** (`settings.json`) rồi chạy `start.cmd`. Mọi cấu hình của các gói
 (`bridge.config.json`, `runner.config.json`, file `.env` Jira, MCP của worker, flow của worker) được sinh tự động.
@@ -61,20 +61,21 @@ Cách dành cho người dùng: chỉ điền **một file** (`settings.json`) r
 Cần có sẵn: Node.js ≥ 22, Git for Windows, Claude Code (`claude` trong PATH, đã đăng nhập), uv (`winget install astral-sh.uv`).
 
 ```bat
-git clone https://github.com/madpoly-studio/claude-bridge-4dev.git D:\mps-claude-bridge\app
-node D:\mps-claude-bridge\app\scripts\mps-bridge\setup.mjs
+git clone https://github.com/madpoly-studio/claude-bridge-4dev.git D:\claude-bridge
+node D:\claude-bridge\scripts\mps-bridge\setup.mjs
 ```
 
-`setup.mjs` tạo `D:\mps-claude-bridge` (nếu chưa có), clone hoặc cập nhật `app\` (nhánh `main`), cài thư viện,
-build, rồi tạo `settings.json` mẫu, `start.cmd`, `update.cmd` và `HUONG-DAN.txt`.
+Clone vào thư mục nào cũng được (`D:\claude-bridge` chỉ là ví dụ); bản clone đó chính là ứng dụng. `setup.mjs` tạo thư
+mục làm việc `ws\` ngay trong bản clone (git bỏ qua nó), cài thư viện, build, rồi tạo `ws\settings.json` mẫu,
+`ws\start.cmd`, `ws\update.cmd` và `ws\HUONG-DAN.txt`. Setup không clone hay pull gì thêm.
 
 | Việc | Cách làm |
 |---|---|
-| Điền cấu hình | Mở `D:\mps-claude-bridge\settings.json`, thay mọi giá trị `<VIET_HOA>` (Jira PAT, project key, repo). Khóa bắt đầu bằng `_` chỉ là hướng dẫn |
-| Chạy | `start.cmd`: kiểm tra settings (liệt kê **mọi** lỗi một lần), kiểm tra công cụ và cổng, sinh `generated\`, tạo worktree cho từng worker, rồi chạy backend + runner + web trong một cửa sổ |
+| Điền cấu hình | Mở `ws\settings.json`, thay mọi giá trị `<VIET_HOA>` (Jira PAT, project key, repo). Khóa bắt đầu bằng `_` chỉ là hướng dẫn |
+| Chạy | `ws\start.cmd`: kiểm tra settings (liệt kê **mọi** lỗi một lần), kiểm tra công cụ và cổng, sinh `ws\generated\`, tạo worktree cho từng worker, rồi chạy backend + runner + web trong một cửa sổ |
 | Mở giao diện | `http://127.0.0.1:4173` (mặc định), dán pairing token in trong khung "claude-bridge đang chạy" |
 | Dừng | Ctrl+C trong cửa sổ đó. Hỏi `Terminate batch job (Y/N)?` thì gõ Y |
-| Cập nhật | Dừng dịch vụ, rồi `update.cmd` (từ chối nếu dịch vụ còn chạy hoặc `app\` có thay đổi chưa commit) |
+| Cập nhật | Dừng dịch vụ, rồi `ws\update.cmd`: `git pull --ff-only origin main` trong bản clone, cài thư viện, build. Từ chối nếu dịch vụ còn chạy, hoặc bản clone có thay đổi chưa commit, không ở nhánh `main`, hay không có remote `origin` |
 
 Cổng: `ports.bridge` (mặc định 8787) và `ports.web` (mặc định 4173). Giao diện mặc định kết nối `ws://127.0.0.1:8787/ws`;
 đổi `ports.bridge` thì lần đầu nhập WebSocket URL mà `start.cmd` in ra ở màn hình Kết nối.
@@ -84,9 +85,45 @@ kịp (xem `logs\`), `2` `settings.json` thiếu hoặc sai, `3` môi trường 
 `130` Ctrl+C lần hai (dừng ngay).
 
 `generated\` bị xóa và ghi lại ở mỗi lần start: không sửa tay. `settings.json` và `generated\` chứa Jira PAT, `logs\`
-chứa pairing token. Worktree trong `worktrees\` không bao giờ bị script xóa hay reset: việc dở (sau Ctrl+C) được cất vào
-`git stash` ở lần start sau. `repos[].path` nên là một bản clone riêng cho bridge, không phải clone đang code hằng ngày.
-Mỗi lúc chỉ một `start.cmd` / `update.cmd` chạy trên một thư mục làm việc (`data\mps-bridge.lock`).
+chứa pairing token. Worktree của worker không bao giờ bị script xóa hay reset: việc dở (sau Ctrl+C) được cất vào
+`git stash` ở lần start sau. `repos[].path` nên là một bản clone riêng cho bridge, không phải clone đang code hằng ngày,
+và không được nằm trong bản clone bridge. Mỗi lúc chỉ một `start.cmd` / `update.cmd` chạy trên một thư mục làm việc
+(`data\mps-bridge.lock`).
+
+Lưu ý khi chạy từ bản clone:
+
+- **Đừng chạy `git clean -fdx`** trong bản clone: lệnh đó xóa luôn `ws\` (settings, token, cơ sở dữ liệu, worktree).
+- **Dùng một bản clone riêng để chạy bridge**, không code trên đó: `update.cmd` cần bản clone sạch trên `main` và build
+  lại tại chỗ; `pnpm build` khi đang dev sẽ thay `dist\` dưới chân runner đang chạy. File cấu hình của chế độ dev
+  (`bridge.config.json`, `runner.config.json`, `config\mcp\`, `data\`, `.env*`) trong bản clone bị cấm với worker và
+  `start.cmd` cảnh báo nếu thấy chúng; file `jira_env_file` mà `bridge.config.json` ở gốc bản clone trỏ tới (đường
+  dẫn tương đối tính từ gốc bản clone) cũng bị cấm và cảnh báo khi nằm trong bản clone. `--workspace` chỉ được trỏ vào
+  trong bản clone khi nằm dưới `ws\`.
+- **Đường dẫn dài** (repo Unity, bản clone nằm sâu): worktree mặc định ở `ws\worktrees\<repo>-01`, cộng thêm đường dẫn
+  file dài nhất của repo có thể vượt 260 ký tự của Windows (`start.cmd` cảnh báo). Đặt `worktrees_dir` trong
+  `settings.json` sang một thư mục ngắn (ví dụ `D:/wt`) và chạy `git config --global core.longpaths true`. Thư mục này
+  phải nằm ngoài mọi repo và ngoài bản clone bridge (trừ trong `ws\`), mỗi bridge một thư mục riêng. Quyền truy cập
+  (ACL) chỉ được khóa trên `ws\`, không khóa trên `worktrees_dir` riêng (không có bí mật nào ở đó). Đổi `worktrees_dir`
+  thì `start.cmd` liệt kê worktree cũ kèm lệnh `git worktree remove` để bạn tự xóa.
+- **Thư mục cha của worktree**: Claude Code nạp `CLAUDE.md` / `CLAUDE.local.md` / `.claude\CLAUDE.md` ở mọi thư mục
+  cha của nơi worker và orchestrator chạy, và Node đọc `node_modules` / `package.json` ở thư mục cha. Với bố cục mặc
+  định, các thư mục cha gồm cả bản clone bridge: đừng thêm `CLAUDE.md` vào gốc repo này. `start.cmd` cảnh báo nếu
+  thấy file như vậy; nếu cần, đặt `worktrees_dir` ra chỗ khác.
+
+### Chuyển từ bản cài cũ `D:\mps-claude-bridge`
+
+Bản cài cũ để mã nguồn trong `D:\mps-claude-bridge\app\` và dữ liệu ngay trong `D:\mps-claude-bridge`. `update.cmd`
+cũ vẫn chạy được (nó cập nhật `app\` rồi ghi lại launcher), nhưng để chuyển sang bố cục mới:
+
+1. Dừng `start.cmd` cũ.
+2. Clone bridge vào thư mục mới và chạy `setup.mjs` như trên. (`setup.mjs` nằm trong `app\` của bản cũ, chạy không có
+   `--workspace`, sẽ từ chối để không tạo thư mục làm việc thứ hai cạnh bản đang chạy; `--ignore-old-install` bỏ qua.)
+3. Chép `D:\mps-claude-bridge\settings.json` sang `ws\settings.json` của bản clone mới. Muốn giữ token đã ghi nhớ trên
+   trình duyệt thì chép thêm `data\pairing-token.txt`; không chép cơ sở dữ liệu.
+4. Việc dở đã được auto-stash nằm trong stash chung của từng repo (`git -C <repo> stash list`), không mất khi xóa worktree.
+5. Xóa worktree cũ: `git -C <repo> worktree remove "D:\mps-claude-bridge\worktrees\<repo>-01"` (hoặc xóa thư mục rồi
+   `git -C <repo> worktree prune`). `start.cmd` mới cũng liệt kê chúng.
+6. Xóa thư mục `D:\mps-claude-bridge`.
 
 Danh sách lệnh cấm của worker (`git push --force`, xóa nhánh remote, …) chỉ là lớp bảo vệ phụ: rule của Claude so khớp
 theo tiền tố nên không chặn được mọi biến thể. Trưởng nhóm cần bật **protected branch** trên GitLab cho `base_branch` của

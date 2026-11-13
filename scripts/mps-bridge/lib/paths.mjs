@@ -1,9 +1,14 @@
-// Workspace layout: every well-known path under the workspace root, plus symlink-safe path containment.
-import { realpathSync } from "node:fs";
+// Workspace layout: the bridge checkout (APP_ROOT), every well-known path under the workspace root, and symlink-safe
+// path containment.
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { EXIT, UserError } from "./errors.mjs";
 
-export const DEFAULT_WORKSPACE = "D:/mps-claude-bridge";
-export const APP_REPO_URL = "https://github.com/madpoly-studio/claude-bridge-4dev.git";
+/** The bridge checkout this file lives in (<clone>\scripts\mps-bridge\lib\paths.mjs). No trailing separator. */
+export const APP_ROOT = path.resolve(fileURLToPath(new URL("../../../", import.meta.url)));
+/** Default workspace folder under APP_ROOT. Must match the anchored "/ws/" line in .gitignore. */
+export const WORKSPACE_DIR_NAME = "ws";
 export const APP_BRANCH = "main";
 
 const IS_WINDOWS = process.platform === "win32";
@@ -11,16 +16,48 @@ const WORKER_NUMBER_WIDTH = 2;
 
 /**
  * @param {string | undefined} flag value of --workspace
- * @returns {string} absolute workspace root
+ * @returns {string} absolute workspace root (default <APP_ROOT>\ws)
  */
 export function resolveWorkspace(flag) {
-  return path.resolve(flag ?? DEFAULT_WORKSPACE);
+  return path.resolve(flag ?? path.join(APP_ROOT, WORKSPACE_DIR_NAME));
+}
+
+/**
+ * A workspace inside the checkout is only allowed under <appRoot>\ws (gitignored): anywhere else settings.json and the
+ * Jira token become untracked files of the bridge repo (update.cmd refuses, "git clean" deletes them). A workspace
+ * that holds the checkout (an install made before ws\ existed) is fine.
+ * @param {string} root absolute workspace root
+ * @param {string} [appRoot]
+ */
+export function assertWorkspaceLocation(root, appRoot = APP_ROOT) {
+  const ws = canonicalPath(root);
+  const defaultWs = path.join(appRoot, WORKSPACE_DIR_NAME);
+  if (isPathInside(canonicalPath(appRoot), ws) && !isPathInside(canonicalPath(defaultWs), ws)) {
+    throw new UserError(
+      `Thư mục làm việc ${root} nằm trong mã nguồn bridge ${appRoot} nhưng ngoài ${defaultWs}: settings.json và Jira ` +
+        `token sẽ thành file chưa commit trong bản clone (update.cmd từ chối cập nhật, git clean xóa mất). ` +
+        `Bỏ --workspace để dùng ${defaultWs}, hoặc chọn thư mục ngoài bản clone.`,
+      EXIT.ENVIRONMENT,
+    );
+  }
+}
+
+/**
+ * The workspace of an install made before ws\ existed (checkout at <old workspace>\app, launchers next to it), or
+ * null. Only the parent of `appRoot` is looked at.
+ * @param {string} [appRoot]
+ * @returns {string | null}
+ */
+export function oldInstallWorkspace(appRoot = APP_ROOT) {
+  const parent = path.dirname(appRoot);
+  const looksInstalled = existsSync(path.join(parent, "settings.json")) && existsSync(path.join(parent, "start.cmd"));
+  return parent !== appRoot && looksInstalled ? parent : null;
 }
 
 /**
  * @typedef {object} WorkspacePaths
  * @property {string} root
- * @property {string} app
+ * @property {string} app bridge checkout root
  * @property {string} settings
  * @property {string} startCmd
  * @property {string} updateCmd
@@ -36,7 +73,7 @@ export function resolveWorkspace(flag) {
  * @property {string} pairingTokenFile
  * @property {string} runnerBootstrapTokenFile
  * @property {string} orchestrators
- * @property {string} worktrees
+ * @property {string} worktrees default <root>\worktrees; the effective root after `withWorktreesRoot` (cmdStart)
  * @property {string} logs
  * @property {string} cliEntry
  * @property {string} templatesDir
@@ -50,11 +87,12 @@ export function resolveWorkspace(flag) {
 
 /**
  * @param {string} root absolute workspace root
+ * @param {string} [appRoot] bridge checkout; source of app, cliEntry, templatesDir, *Entry, webDistIndex, webDir, viteBin
  * @returns {WorkspacePaths}
  */
-export function workspacePaths(root) {
+export function workspacePaths(root, appRoot = APP_ROOT) {
   const j = (...parts) => path.join(root, ...parts);
-  const app = j("app");
+  const app = appRoot;
   const generated = j("generated");
   const data = j("data");
   const webDir = path.join(app, "packages", "web");
@@ -87,6 +125,16 @@ export function workspacePaths(root) {
     webDir,
     viteBin: path.join(webDir, "node_modules", "vite", "bin", "vite.js"),
   };
+}
+
+/**
+ * Effective paths for start: `p` with `worktrees` replaced when `dir` (the validated settings.worktrees_dir) is set.
+ * @param {WorkspacePaths} p
+ * @param {string | null} dir
+ * @returns {WorkspacePaths}
+ */
+export function withWorktreesRoot(p, dir) {
+  return dir === null ? p : { ...p, worktrees: dir };
 }
 
 /**
@@ -149,4 +197,13 @@ export function isPathInside(root, target) {
     return true;
   }
   return t.startsWith(r.endsWith(path.sep) ? r : r + path.sep);
+}
+
+/**
+ * true when `a` and `b` name the same location. Both should already be canonical (case-insensitive on Windows).
+ * @param {string} a
+ * @param {string} b
+ */
+export function samePath(a, b) {
+  return isPathInside(a, b) && isPathInside(b, a);
 }

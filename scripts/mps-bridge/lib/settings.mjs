@@ -3,7 +3,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { jsonErrorMessage } from "./json-error.mjs";
-import { canonicalPath, isPathInside } from "./paths.mjs";
+import { APP_ROOT, WORKSPACE_DIR_NAME, canonicalPath, isPathInside, workspacePaths } from "./paths.mjs";
 
 /** A template value the user still has to replace, e.g. "<JIRA_PERSONAL_TOKEN>". */
 export const PLACEHOLDER_RE = /<[A-Z][A-Z0-9_]*>/;
@@ -15,7 +15,7 @@ const MIN_PORT = 1024;
 const MAX_PORT = 65535;
 const BOM = 0xfeff;
 
-const ROOT_KEYS = ["jira", "projects", "repos", "models", "ports", "max_concurrency"];
+const ROOT_KEYS = ["jira", "projects", "repos", "models", "ports", "max_concurrency", "worktrees_dir"];
 const JIRA_KEYS = ["url", "personal_token", "ca_bundle"];
 const REPO_KEYS = ["name", "path", "project_key", "base_branch", "workers", "allowed_bash"];
 const MODEL_KEYS = ["planner", "orchestrator", "worker"];
@@ -51,6 +51,7 @@ const KIND = Object.freeze({
  * @property {{ planner: string | null, orchestrator: string | null, worker: string | null }} models
  * @property {{ bridge: number, web: number }} ports
  * @property {number} max_concurrency
+ * @property {string | null} worktrees_dir absolute, path.resolve'd; null = <workspace>\worktrees
  */
 
 /**
@@ -59,6 +60,13 @@ const KIND = Object.freeze({
  * @property {(p: string) => boolean} isFile
  * @property {(p: string) => boolean} exists
  * @property {(p: string) => string} canonical
+ */
+
+/**
+ * @typedef {object} ValidationContext
+ * @property {string} workspace absolute workspace root
+ * @property {string} appRoot bridge checkout root (required: tests pass a fake one)
+ * @property {FsProbe} fs
  */
 
 /** @typedef {{ ok: true, raw: unknown } | { ok: false, error: string }} ParseResult */
@@ -127,7 +135,8 @@ export function parseSettingsFile(file) {
 
 /** S00. @param {string} file */
 export function missingSettingsMessage(file) {
-  return `Không tìm thấy ${file}. Chạy setup (hoặc "node app\\scripts\\mps-bridge\\cli.mjs init") để tạo.`;
+  const setup = path.join(APP_ROOT, "scripts", "mps-bridge", "setup.mjs");
+  return `Không tìm thấy ${file}. Chạy setup để tạo: node "${setup}" --workspace "${path.dirname(file)}"`;
 }
 
 /** @param {string} p */
@@ -340,7 +349,7 @@ function validateProjects(c, value) {
  * @param {Collector} c
  * @param {unknown} value
  * @param {string} repoPath JSON path of the repo
- * @param {{ workspace: string, fs: FsProbe }} ctx
+ * @param {ValidationContext} ctx
  * @returns {string | undefined}
  */
 function validateRepoPath(c, value, repoPath, ctx) {
@@ -361,7 +370,16 @@ function validateRepoPath(c, value, repoPath, ctx) {
     return undefined;
   }
   if (isPathInside(repoCanonical, wsCanonical)) {
-    c.add(jsonPath, `Thư mục làm việc ${ctx.workspace} nằm bên trong repo này; chọn repo khác hoặc đặt mps-claude-bridge ở ngoài.`);
+    c.add(jsonPath, `Thư mục làm việc ${ctx.workspace} nằm bên trong repo này; chọn repo khác hoặc clone bridge ra ngoài repo.`);
+    return undefined;
+  }
+  const appCanonical = ctx.fs.canonical(ctx.appRoot);
+  if (isPathInside(appCanonical, repoCanonical)) {
+    c.add(jsonPath, `Repo nằm bên trong mã nguồn bridge ${ctx.appRoot}. Dùng một bản clone riêng đặt ở chỗ khác.`);
+    return undefined;
+  }
+  if (isPathInside(repoCanonical, appCanonical)) {
+    c.add(jsonPath, `Mã nguồn bridge ${ctx.appRoot} nằm bên trong repo này; clone bridge ra ngoài repo rồi chạy lại setup.`);
     return undefined;
   }
   if (!ctx.fs.isDir(resolved)) {
@@ -414,7 +432,7 @@ function validateAllowedBash(c, value, repoPath) {
  * @param {Collector} c
  * @param {unknown} value
  * @param {string[]} projectKeys every project key string the user listed
- * @param {{ workspace: string, fs: FsProbe }} ctx
+ * @param {ValidationContext} ctx
  * @returns {RepoSettings[] | undefined}
  */
 function validateRepos(c, value, projectKeys, ctx) {
@@ -562,8 +580,84 @@ function validatePorts(c, value) {
 }
 
 /**
+ * S04/S06/S60-S67: optional folder for the worker worktrees. It must stay out of every folder the bridge or git owns:
+ * the workspace and the checkout (S62/S63 equal or ancestor), the folders start wipes or holds secrets in (S64), the
+ * checkout outside its gitignored ws\ (S65, else update.cmd refuses a dirty clone), and the repos (S66/S67, skipped
+ * when repos is invalid). First failure wins, like validateRepoPath.
+ * @param {Collector} c
+ * @param {unknown} value
+ * @param {RepoSettings[] | undefined} repos
+ * @param {ValidationContext} ctx
+ * @returns {string | null | undefined} null = default, undefined = error reported
+ */
+function validateWorktreesDir(c, value, repos, ctx) {
+  const jsonPath = "worktrees_dir";
+  if (value === undefined || value === null || (typeof value === "string" && value.trim() === "")) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    c.add(jsonPath, `Phải là ${KIND.STRING_OR_NULL}.`);
+    return undefined;
+  }
+  const given = c.notPlaceholder(value.trim(), jsonPath);
+  if (given === undefined) {
+    return undefined;
+  }
+  if (!isAbsoluteLocal(given)) {
+    c.add(jsonPath, "Phải là đường dẫn tuyệt đối (ví dụ D:/wt).");
+    return undefined;
+  }
+  const resolved = path.resolve(given);
+  if (ctx.fs.exists(resolved) && !ctx.fs.isDir(resolved)) {
+    c.add(jsonPath, `"${resolved}" đã tồn tại nhưng không phải thư mục.`);
+    return undefined;
+  }
+  const wt = ctx.fs.canonical(resolved);
+  const ws = ctx.fs.canonical(ctx.workspace);
+  const app = ctx.fs.canonical(ctx.appRoot);
+  if (isPathInside(wt, ws)) {
+    c.add(jsonPath, `Không được trùng hoặc chứa thư mục làm việc ${ctx.workspace}. Chọn một thư mục riêng, ví dụ D:/wt.`);
+    return undefined;
+  }
+  if (isPathInside(wt, app)) {
+    c.add(jsonPath, `Không được trùng hoặc chứa mã nguồn bridge ${ctx.appRoot}. Chọn một thư mục riêng, ví dụ D:/wt.`);
+    return undefined;
+  }
+  const p = workspacePaths(ctx.workspace, ctx.appRoot);
+  const managedDir = [p.generated, p.data, p.logs, p.orchestrators].find((d) => isPathInside(ctx.fs.canonical(d), wt));
+  if (managedDir !== undefined) {
+    c.add(
+      jsonPath,
+      `Không được nằm trong ${managedDir}: thư mục này do bridge tự quản lý (generated bị xóa và ghi lại mỗi lần start).`,
+    );
+    return undefined;
+  }
+  const appWs = path.join(ctx.appRoot, WORKSPACE_DIR_NAME);
+  if (isPathInside(app, wt) && !isPathInside(ctx.fs.canonical(appWs), wt)) {
+    c.add(
+      jsonPath,
+      `Nằm trong mã nguồn bridge ${ctx.appRoot}: bản clone sẽ có thay đổi chưa commit và update.cmd sẽ từ chối cập nhật. ` +
+        `Đặt ở ngoài (ví dụ D:/wt) hoặc trong ${appWs}.`,
+    );
+    return undefined;
+  }
+  for (const repo of repos ?? []) {
+    const repoCanonical = ctx.fs.canonical(repo.path);
+    if (isPathInside(repoCanonical, wt)) {
+      c.add(jsonPath, `Nằm bên trong repo ${repo.name} (${repo.path}). Worktree của worker phải ở ngoài mọi repo.`);
+      return undefined;
+    }
+    if (isPathInside(wt, repoCanonical)) {
+      c.add(jsonPath, `Chứa repo ${repo.name} (${repo.path}). Chọn thư mục không chứa repo nào.`);
+      return undefined;
+    }
+  }
+  return resolved;
+}
+
+/**
  * @param {unknown} raw parsed settings with `_*` keys already stripped
- * @param {{ workspace: string, fs: FsProbe }} ctx
+ * @param {ValidationContext} ctx
  * @returns {ValidationResult}
  */
 export function validateSettings(raw, ctx) {
@@ -593,7 +687,9 @@ export function validateSettings(raw, ctx) {
     }
   }
 
-  if (c.errors.length > 0 || !jira || !repos || !models || !ports) {
+  const worktreesDir = validateWorktreesDir(c, root.worktrees_dir, repos, ctx);
+
+  if (c.errors.length > 0 || !jira || !repos || !models || !ports || worktreesDir === undefined) {
     return { errors: c.errors, warnings, settings: null };
   }
 
@@ -619,6 +715,7 @@ export function validateSettings(raw, ctx) {
       models,
       ports,
       max_concurrency: maxConcurrency ?? repos.reduce((sum, r) => sum + r.workers, 0),
+      worktrees_dir: worktreesDir,
     },
   };
 }
