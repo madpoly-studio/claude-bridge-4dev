@@ -16,7 +16,11 @@ import type { Store } from "../state/store";
 import type { NoticeKind } from "../state/types";
 import type { BridgeActions, PermissionResponse } from "./bridge-actions";
 
-const REPLY_DELAY_MS = 700;
+/**
+ * Thời gian agent demo "xử lý" trước khi trả lời. Đủ dài để ở chế độ Văn phòng robot kịp đi từ góc home lên chỗ làm việc
+ * (planner mất khoảng 2,7 s) và đứng làm việc một lúc rồi mới quay về.
+ */
+export const DEMO_REPLY_DELAY_MS = 4_500;
 const DEMO_NEW_TICKET = "SH-134";
 
 function msg<K extends ServerMessageType>(type: K, payload: ServerPayloads[K]): ServerMessage {
@@ -24,7 +28,10 @@ function msg<K extends ServerMessageType>(type: K, payload: ServerPayloads[K]): 
 }
 
 export class DemoBridgeService implements BridgeActions {
-  constructor(private readonly store: Store) {}
+  constructor(
+    private readonly store: Store,
+    private readonly replyDelayMs: number = DEMO_REPLY_DELAY_MS,
+  ) {}
 
   connect(): void {
     this.notify("info", "Chế độ demo: không kết nối backend.");
@@ -73,7 +80,7 @@ export class DemoBridgeService implements BridgeActions {
     setTimeout(() => {
       this.pushRecord(sessionId, "agent", assistantText(`(demo) Đã nhận: “${text}”. Trong chế độ demo không có agent thật.`));
       this.setBusy(sessionId, false);
-    }, REPLY_DELAY_MS);
+    }, this.replyDelayMs);
     return true;
   }
 

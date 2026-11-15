@@ -1,0 +1,282 @@
+/*
+ * Khung chat nổi, định vị trong vùng cảnh (<main> của OfficeView, position: relative).
+ * Hình học khi mở do computeSceneFit quyết định; useSceneScale ghi lên <main>: --chat-width, --chat-gap, data-chat-layout.
+ * Giá trị mặc định trong var() chỉ dùng khi chưa đo được vùng cảnh (jsdom).
+ * Hai quy tắc bắt buộc:
+ * 1. .root và mọi tổ tiên không được có transform / filter / backdrop-filter / contain / will-change: transform,
+ *    nếu không NewSessionDialog (position: fixed) sẽ bị nhốt trong khung.
+ * 2. Ẩn pane và khung bằng visibility, không dùng display: none (giữ layout để khung cuộn bám đáy, nháp không mất).
+ */
+
+.root {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  /* Dưới Modal (50) và Notice (60). */
+  z-index: 40;
+  pointer-events: none;
+}
+
+/* Mở: lấp gần trọn phần bên phải bản đồ, chừa một khe đều bốn phía để vẫn là khung nổi. */
+.root[data-open="true"] {
+  top: var(--chat-gap, 8px);
+  right: var(--chat-gap, 8px);
+  bottom: var(--chat-gap, 8px);
+  width: var(--chat-width, 420px);
+  max-width: calc(100% - 2 * var(--chat-gap, 8px));
+}
+
+.frame {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg);
+  box-shadow: 0 14px 40px rgb(0 0 0 / 0.55);
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+/* Thu gọn: khung vẫn giữ một kích thước thật (quy tắc 2), chỉ ẩn đi. */
+.frame[data-open="false"] {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: min(420px, calc(100vw - 32px));
+  height: min(620px, calc(100dvh - 7rem));
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-2) 0 var(--sp-3);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tabs {
+  flex: 1 1 auto;
+  display: flex;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: var(--tap);
+  padding: 0 var(--sp-5) 0 var(--sp-2);
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: transparent;
+  color: var(--color-text-dim);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--color-text);
+}
+
+.tabActive {
+  background: var(--color-bg);
+  border-color: var(--color-border);
+  color: var(--color-text);
+  font-weight: 600;
+  /* Che đường viền dưới của .head. */
+  margin-bottom: -1px;
+}
+
+.tabAvatar {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #262a4a;
+  overflow: hidden;
+}
+
+.tabAvatar img {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+}
+
+.collapse {
+  align-self: center;
+  flex: none;
+}
+
+.badge {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+}
+
+.badgeAlert {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  background: var(--color-warn);
+  color: #2a1700;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.badgeBusy {
+  width: 10px;
+  height: 10px;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 3px rgb(127 178 255 / 0.25);
+}
+
+/* Cả hai pane chồng lên nhau trong một ô grid. */
+.panes {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+}
+
+.pane {
+  grid-area: 1 / 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pane[data-active="false"] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/*
+ * Ghi đè cột chat bằng selector cấu trúc (không sửa PlannerColumn / OrchestratorColumn / column.module.css):
+ * bỏ min-height 28rem, ẩn tiêu đề trùng nhãn tab (chỉ con trực tiếp, không đụng tiêu đề của NewSessionDialog),
+ * gỡ max-height 70vh của media query theo viewport.
+ */
+.pane > section {
+  min-height: 0;
+  height: 100%;
+}
+
+.pane > section > div:first-child {
+  flex-wrap: nowrap;
+  min-height: 0;
+  padding: var(--sp-3) var(--sp-5);
+}
+
+.pane > section > div:first-child > h2 {
+  display: none;
+}
+
+.pane > section > div:first-child > select {
+  flex: 1 1 6rem;
+  min-width: 0;
+  max-width: none;
+}
+
+.pane > section > div:first-child > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane > section > div:nth-child(2) {
+  max-height: none;
+}
+
+.pane > section > div:nth-child(3) {
+  padding: var(--sp-3) var(--sp-5);
+}
+
+/* Dock khi thu gọn: hai avatar. */
+.dock {
+  display: flex;
+  gap: 14px;
+  pointer-events: auto;
+}
+
+.dockBtn {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 2px solid rgb(255 255 255 / 0.22);
+  background: radial-gradient(circle at 50% 35%, #3a3f6e, #1b1d33);
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.5);
+  transition: border-color 0.12s;
+}
+
+.dockBtn:hover {
+  border-color: var(--color-accent);
+}
+
+.dockBtn img {
+  width: 46px;
+  height: 46px;
+  object-fit: contain;
+}
+
+.dockBtn .badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  box-shadow: 0 0 0 2px var(--color-bg);
+}
+
+.dockName {
+  position: absolute;
+  left: 50%;
+  bottom: -9px;
+  transform: translateX(-50%);
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgb(15 17 21 / 0.92);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+/* Vùng cảnh hẹp (data-chat-layout="sheet", ngưỡng CHAT_SHEET_BELOW_PX): khung thành bottom sheet đè lên bản đồ. */
+[data-chat-layout="sheet"] .root,
+[data-chat-layout="sheet"] .root[data-open="true"] {
+  top: auto;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: auto;
+  max-width: none;
+  display: flex;
+  justify-content: flex-end;
+}
+
+[data-chat-layout="sheet"] .frame {
+  width: 100%;
+  height: min(70dvh, 620px);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  border-width: 1px 0 0;
+}
+
+[data-chat-layout="sheet"] .dock {
+  margin: 0 16px 20px 0;
+}

@@ -47,6 +47,37 @@ Trang chạy trên host SSO (origin công khai) nhưng mở WebSocket tới `ws:
 - `granted` (hoặc trình duyệt không có cơ chế này) và đã có token: tự kết nối.
 - `denied`: hướng dẫn mở cài đặt trang (biểu tượng bên trái thanh địa chỉ) → Local network access → Allow, rồi tải lại.
 
+## Chế độ Văn phòng (thử nghiệm)
+
+Chế độ xem thứ hai: văn phòng isometric, mỗi worker là một robot. Dashboard 3 cột vẫn là mặc định; chuyển qua lại bằng nút **Văn phòng / Dashboard** trên top bar (lựa chọn được nhớ trong localStorage). Cảnh chỉ suy ra từ `AppState` đã có, không thêm gì vào protocol hay reducer.
+
+| URL | Hiện gì |
+|---|---|
+| `?demo=1&view=office` | Kịch bản sống: mỗi 2,5 s một bước (nhận task, chạy, báo progress, xong, lỗi, offline rồi quay lại) |
+| `&scenario=still` | Fixture gốc, đứng yên |
+| `&scenario=crowd` | 18 worker, có chip "+N" cho worker không có bàn |
+| `&scenario=paused` / `ratelimit` / `dead` / `disconnected` | Dừng giao việc / rate limit (robot rảnh ra quầy cà phê) / orchestrator chết / mất kết nối |
+| `&scenario=agents-home` / `planner-busy` / `orchestrator-busy` | Cả hai agent rảnh ở góc dưới-phải / planner đang trả lời ở khu Planning / orchestrator đang xử lý ở bàn điều phối |
+| `&scenario=fx` | Sau 0,6 s: một task lỗi, một task xong (giấy note bay lên bảng kanban), một bong bóng progress |
+| `&chat=closed` / `planner` / `orchestrator` | Ép trạng thái khung chat nổi cho lần tải đó |
+| `&debug=grid` | Lưới 100 px, điểm neo và gate, dùng khi chỉnh `model/layout.ts` |
+
+`?view=office|dashboard` chỉ có tác dụng cho lần tải đó và không ghi vào localStorage.
+
+Đọc cảnh: robot ở thảm đỏ là IDLE, ở bàn là đang có task (màn hình bàn đổi theo phase, 5 chấm dưới tên là phase), cạnh pod bên trái là OFFLINE. Bấm robot đang có task để mở chi tiết task; bấm bảng kanban để mở danh sách ticket; bấm robot Planner / Orchestrator để mở khung chat (ở chỗ nào cũng bấm được). Skin của robot là `fnv1a32(worker_id) % 5`, nên cùng một worker luôn có cùng hình trên mọi máy.
+
+Hai agent có hai chỗ (`model/layout.ts`, `planner` / `orchestrator`): góc `home` ở góc dưới-phải của sàn (planner bên trái, orchestrator bên phải) và chỗ `work` ở khu Planning. Rảnh thì đứng ở `home`. Khi phiên của agent bận (bạn vừa nhắn cho nó) thì nó tự đi lên chỗ `work`, xong việc lại đi về; planner đang chờ bạn duyệt bản nháp vẫn ở chỗ `work` với dấu "!". Orchestrator `dead` / `stopped` / `restarting` đứng ở `home` với trạng thái tương ứng. Robot chỉ đổi chỗ khi trạng thái mới giữ đủ lâu (`AGENT_SPOT_DELAY_MS`: 0,2 s để đi lên, 1,2 s để đi về), nên một lượt bận chớp nhoáng không làm nó chạy qua chạy lại. Đường đi dùng chung `useRouteWalker` với worker; `prefers-reduced-motion` thì nhảy thẳng tới đích.
+
+Toàn bộ code nằm trong `src/components/office/` (`model/` thuần và có test, `scene/` vẽ, `chat/`, `panels/`, `demo/`, `assets/`). Ngoài thư mục đó chỉ có ba chỗ nối: `AppShell.tsx` (chọn view, nạp lười), `Dashboard.tsx` và `TopBar.tsx` (một prop tùy chọn để đặt nút chuyển). Gỡ tính năng: xóa thư mục `office/` và hoàn tác ba file này.
+
+Ảnh trong `assets/` (WebP, khoảng 1,8 MB, chỉ tải khi vào Văn phòng) do script sinh từ ảnh gốc trong `brainstorm/newUI/sprites/`. Ảnh gốc không nằm trong repo (khoảng 16 MB), chỉ có script; cần có bộ ảnh đó tại đường dẫn trên thì mới sinh lại được:
+
+```bash
+uv run --with pillow python brainstorm/newUI/tools/build_office_assets.py
+```
+
+Lưu ý khi chạy test bằng Node 25 trở lên: Node có sẵn một `localStorage` toàn cục chưa cấu hình, che mất bản của jsdom và làm hỏng các test dùng localStorage (kể cả test có từ trước). Chạy với `NODE_OPTIONS=--no-experimental-webstorage pnpm --filter @claude-bridge/web test`.
+
 ## Kiến trúc
 
 ```

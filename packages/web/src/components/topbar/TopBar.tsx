@@ -1,4 +1,5 @@
 import { useId, useState } from "react";
+import type { ReactNode } from "react";
 import type { OrchestratorHealth } from "@claude-bridge/protocol";
 import { useBridgeActions, useBridgeState, useIsDemo } from "../../hooks/bridge-context";
 import { useNow } from "../../hooks/useNow";
@@ -16,6 +17,8 @@ import styles from "./topbar.module.css";
 
 interface TopBarProps {
   onOpenConnection: () => void;
+  /** Phần tử thêm ở đầu nhóm nút (nút chuyển chế độ xem). */
+  extraActions?: ReactNode;
 }
 
 const BACKEND_CHIP: Record<ConnectionPhase, { text: string; tone: ChipTone }> = {
@@ -37,7 +40,7 @@ const ORCH_TONE: Record<OrchestratorHealth, ChipTone> = {
   stopped: "off",
 };
 
-export function TopBar({ onOpenConnection }: TopBarProps) {
+export function TopBar({ onOpenConnection, extraActions }: TopBarProps) {
   const state = useBridgeState();
   const actions = useBridgeActions();
   const demo = useIsDemo();
@@ -95,6 +98,7 @@ export function TopBar({ onOpenConnection }: TopBarProps) {
       </ul>
 
       <div className={styles.actions}>
+        {extraActions}
         {notif === "default" && (
           <button
             type="button"

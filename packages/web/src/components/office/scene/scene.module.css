@@ -1,0 +1,1017 @@
+/* Cảnh văn phòng: sân khấu 1448x1086 được scale theo vùng cảnh (--scene-scale, --scene-left do useSceneScale ghi lên <main>); mọi tọa độ con theo hệ ảnh nền. */
+
+.viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  overflow: auto;
+  background:
+    radial-gradient(120% 90% at 50% 0%, #2b2947 0%, #171827 55%, var(--color-bg) 100%);
+}
+
+.stageBox {
+  position: relative;
+  width: calc(1448px * var(--scene-scale, 1));
+  height: calc(1086px * var(--scene-scale, 1));
+  margin-left: var(--scene-left, 0px);
+  /* --scene-fit-ms chỉ khác 0 trong lúc mở / thu gọn khung chat (useSceneScale). */
+  transition:
+    width var(--scene-fit-ms, 0ms) ease,
+    height var(--scene-fit-ms, 0ms) ease,
+    margin-left var(--scene-fit-ms, 0ms) ease;
+}
+
+.stage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1448px;
+  height: 1086px;
+  transform-origin: 0 0;
+  transform: scale(var(--scene-scale, 1));
+  /* Transition của sân khấu độc lập với transition của từng robot (.actor là phần tử riêng). */
+  transition: transform var(--scene-fit-ms, 0ms) ease;
+  /* Mọi z-index bên trong không lọt ra ngoài sân khấu. */
+  isolation: isolate;
+  overflow: hidden;
+  background-color: #b89088;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.depth {
+  z-index: 1;
+}
+
+.tint {
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 0.8s ease, background-color 0.8s ease;
+}
+
+.tint[data-mode="paused"] {
+  opacity: 1;
+  background: linear-gradient(180deg, rgb(18 24 58 / 0.5), rgb(22 20 60 / 0.42));
+  mix-blend-mode: multiply;
+}
+
+.tint[data-mode="disconnected"] {
+  opacity: 1;
+  background: rgb(70 74 84 / 0.62);
+  mix-blend-mode: saturation;
+}
+
+/* Mất kết nối: phủ thêm một lớp tối nhẹ (blend saturation chỉ rút màu). */
+.tintDim {
+  z-index: 2;
+  background: rgb(12 14 20 / 0.35);
+  opacity: 0;
+  transition: opacity 0.8s ease;
+}
+
+.tintDim[data-on="true"] {
+  opacity: 1;
+}
+
+.labels {
+  z-index: 3;
+}
+
+.fx {
+  z-index: 4;
+}
+
+/* ------------------------------------------------------------------ chữ trên sàn */
+
+.decal {
+  position: absolute;
+  z-index: 0;
+  padding: 2px 12px 3px 15px;
+  border-radius: 10px;
+  font-weight: 800;
+  font-size: 17px;
+  letter-spacing: 0.16em;
+  white-space: nowrap;
+  color: rgb(255 255 255 / 0.92);
+  transform-origin: 0 0;
+}
+
+.decal[data-axis="left"] {
+  transform: matrix(0.955, -0.296, 0.955, 0.296, 0, 0) translate(-50%, -50%);
+}
+
+.decal[data-axis="right"] {
+  transform: matrix(0.955, 0.296, -0.955, 0.296, 0, 0) translate(-50%, -50%);
+}
+
+.decal[data-tone="relax"] {
+  background: rgb(170 74 58 / 0.62);
+  box-shadow: 0 0 0 2px rgb(255 214 190 / 0.6);
+}
+
+.decal[data-tone="planning"] {
+  background: rgb(126 84 168 / 0.62);
+  box-shadow: 0 0 0 2px rgb(236 214 255 / 0.6);
+}
+
+.decal[data-tone="work"] {
+  background: rgb(168 122 52 / 0.6);
+  box-shadow: 0 0 0 2px rgb(255 232 170 / 0.65);
+}
+
+/* ------------------------------------------------------------------ nội thất */
+
+.item {
+  position: absolute;
+  transform: translate(-50%, -100%);
+}
+
+.item img {
+  display: block;
+}
+
+.itemFlip img {
+  transform: scaleX(-1);
+}
+
+.itemSoftBase img {
+  -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 12px), transparent);
+  mask-image: linear-gradient(180deg, #000 calc(100% - 12px), transparent);
+}
+
+/* Màn hình bàn: hình bình hành phủ lên màn hình trong ảnh, nội dung chạy theo phase. */
+.screen {
+  position: absolute;
+  overflow: hidden;
+  border-radius: 2px;
+  transform: skewY(var(--skew, -14deg));
+  background: #0b1a2c;
+  box-shadow: 0 0 10px 1px rgb(120 190 255 / 0.55);
+}
+
+.screenContent {
+  position: absolute;
+  inset: -100% 0 0 0;
+  animation: office-scroll 2.4s linear infinite;
+}
+
+.screen[data-screen="waiting"] {
+  background: #10243b;
+  box-shadow: 0 0 6px rgb(120 170 230 / 0.35);
+}
+
+.screen[data-screen="waiting"] .screenContent {
+  inset: 0;
+  background: radial-gradient(circle at 30% 55%, #9fc6ff 0 2px, transparent 3px), radial-gradient(circle at 50% 55%, #9fc6ff 0 2px, transparent 3px),
+    radial-gradient(circle at 70% 55%, #9fc6ff 0 2px, transparent 3px);
+  animation: office-blink 1.4s ease-in-out infinite;
+}
+
+/* understanding: trang tài liệu, các dòng chữ sáng cuộn chậm. */
+.screen[data-screen="understanding"] {
+  background: #e9eef7;
+  box-shadow: 0 0 10px 1px rgb(220 235 255 / 0.7);
+}
+
+.screen[data-screen="understanding"] .screenContent {
+  background: repeating-linear-gradient(180deg, transparent 0 3px, #6f7f9c 3px 5px, transparent 5px 8px);
+  background-size: 78% 100%;
+  background-repeat: no-repeat;
+  background-position: 50% 0;
+  animation-duration: 5s;
+}
+
+/* implementing: dòng code nhiều màu cuộn nhanh trên nền tối. */
+.screen[data-screen="implementing"] .screenContent {
+  background:
+    repeating-linear-gradient(180deg, transparent 0 3px, #58e0c0 3px 5px, transparent 5px 9px, #7fb2ff 9px 11px, transparent 11px 15px, #f2a65a 15px 17px, transparent 17px 21px);
+  background-size: 70% 100%;
+  background-repeat: no-repeat;
+  background-position: 22% 0;
+  animation-duration: 1.6s;
+}
+
+/* testing: các ô kết quả test xanh chạy ngang. */
+.screen[data-screen="testing"] {
+  background: #10281f;
+  box-shadow: 0 0 10px 1px rgb(110 230 170 / 0.6);
+}
+
+.screen[data-screen="testing"] .screenContent {
+  inset: 0 0 0 -100%;
+  background: repeating-linear-gradient(90deg, #5fd0a0 0 6px, transparent 6px 9px);
+  background-size: 100% 44%;
+  background-repeat: no-repeat;
+  background-position: 0 50%;
+  animation: office-slide 1.8s linear infinite;
+}
+
+/* pushing: sọc chéo chạy lên. */
+.screen[data-screen="pushing"] {
+  background: #2a1d0c;
+  box-shadow: 0 0 10px 1px rgb(255 190 110 / 0.65);
+}
+
+.screen[data-screen="pushing"] .screenContent {
+  background: repeating-linear-gradient(-45deg, #f2a65a 0 5px, transparent 5px 11px);
+  animation: office-scroll-up 1.2s linear infinite;
+}
+
+/* mr_created: màn hình xanh có dấu tích. */
+.screen[data-screen="mr_created"] {
+  background: #1f8f6b;
+  box-shadow: 0 0 12px 2px rgb(110 240 190 / 0.8);
+}
+
+.screen[data-screen="mr_created"] .screenContent {
+  inset: 0;
+  animation: none;
+}
+
+.screen[data-screen="mr_created"] .screenContent::after {
+  content: "✓";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 800;
+  font-size: 22px;
+  line-height: 1;
+}
+
+@keyframes office-scroll {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(50%);
+  }
+}
+
+@keyframes office-scroll-up {
+  from {
+    transform: translateY(50%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes office-slide {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(50%);
+  }
+}
+
+@keyframes office-blink {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Đèn tủ server: một cột đồng hồ trên mặt trước của tủ, có nền tối để tách khỏi đèn vẽ sẵn trong ảnh. */
+.leds {
+  position: absolute;
+  left: 13px;
+  top: 40px;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 3px;
+  background: rgb(6 10 16 / 0.9);
+  box-shadow: 0 0 0 1px rgb(111 242 192 / 0.45);
+  transform: skewY(24deg);
+}
+
+.led {
+  width: 20px;
+  height: 5px;
+  border-radius: 1.5px;
+  background: #223040;
+}
+
+.ledOn {
+  background: #6ff2c0;
+  box-shadow: 0 0 6px 1px rgb(111 242 192 / 0.9);
+  animation: office-blink 1.6s ease-in-out infinite;
+}
+
+.ledOn:nth-child(2n) {
+  animation-delay: -0.5s;
+}
+
+.ledOn:nth-child(3n) {
+  animation-delay: -1.1s;
+}
+
+/* Robot hút bụi tuần tra lối đi phía trước. */
+.vacuum {
+  position: absolute;
+  left: 0;
+  top: 0;
+  offset-rotate: 0deg;
+  offset-anchor: 50% 90%;
+  animation: office-patrol 46s linear infinite;
+}
+
+.vacuum img {
+  display: block;
+}
+
+@keyframes office-patrol {
+  from {
+    offset-distance: 0%;
+  }
+  to {
+    offset-distance: 100%;
+  }
+}
+
+/* ------------------------------------------------------------------ sprite */
+
+.sprite {
+  display: block;
+  background-repeat: no-repeat;
+  background-size: calc(var(--cols) * 100%) calc(var(--rows) * 100%);
+  background-position: 0 var(--row-pos);
+  animation: office-sprite var(--dur) steps(var(--frames), jump-none) var(--iter) both;
+}
+
+.sprite[data-static="true"] {
+  animation: none;
+}
+
+@keyframes office-sprite {
+  from {
+    background-position-x: 0%;
+  }
+  to {
+    background-position-x: var(--end-x);
+  }
+}
+
+/* Mất kết nối: dữ liệu đang cũ, cả cảnh đứng hình. */
+.stage[data-frozen="true"] .sprite,
+.stage[data-frozen="true"] .agentFloat,
+.stage[data-frozen="true"] .screenContent,
+.stage[data-frozen="true"] .ring,
+.stage[data-frozen="true"] .vacuum,
+.stage[data-frozen="true"] .ledOn {
+  animation-play-state: paused;
+}
+
+/* ------------------------------------------------------------------ robot */
+
+.actor,
+.tagAnchor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  /* z-index do useWalkDepth ghi thẳng lên phần tử: theo chỗ đứng khi đứng yên, theo từng khung hình khi đang đi
+     (Chrome không nội suy z-index trong transition). */
+  transition: transform var(--seg-ms, 0ms) linear;
+}
+
+.actor[data-ready="false"],
+.tagAnchor[data-ready="false"] {
+  transition: none;
+}
+
+.actor[data-moving="true"] {
+  will-change: transform;
+}
+
+.shadow {
+  position: absolute;
+  left: -38px;
+  top: -11px;
+  width: 76px;
+  height: 22px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgb(50 24 44 / 0.42), rgb(50 24 44 / 0));
+}
+
+.hit {
+  position: absolute;
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: 18px;
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.hit:hover .sprite {
+  filter: brightness(1.08) drop-shadow(0 0 6px rgb(255 255 255 / 0.55));
+}
+
+.hit:focus-visible {
+  box-shadow:
+    0 0 0 2px rgb(15 17 21 / 0.9),
+    0 0 0 5px var(--color-accent);
+}
+
+.spriteBox {
+  position: absolute;
+  pointer-events: none;
+}
+
+/* Agent lơ lửng. */
+.agentShadow {
+  position: absolute;
+  left: -30px;
+  top: -9px;
+  width: 60px;
+  height: 18px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgb(40 20 60 / 0.38), rgb(40 20 60 / 0));
+}
+
+.agentShadow[data-anim="alert"] {
+  background: radial-gradient(closest-side, rgb(255 190 80 / 0.55), rgb(255 190 80 / 0));
+}
+
+.agentFloat {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: block;
+  animation: office-float 3.2s ease-in-out infinite;
+}
+
+.agentFloat[data-anim="processing"] {
+  animation-duration: 0.9s;
+}
+
+.agentFloat[data-anim="alert"] {
+  animation: office-shake 0.9s ease-in-out infinite;
+}
+
+/* Đang đi giữa góc home và chỗ làm việc: nhún nhanh, thay cho hàng move của sprite sheet (agent chỉ có một frame). */
+.agentFloat[data-moving="true"] {
+  animation: office-travel 0.44s ease-in-out infinite;
+}
+
+.agentFloat[data-anim="off"] {
+  animation: none;
+  transform: translateY(14px);
+  opacity: 0.55;
+  filter: grayscale(0.9);
+}
+
+@keyframes office-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes office-travel {
+  0%,
+  100% {
+    transform: translateY(-2px);
+  }
+  50% {
+    transform: translateY(-9px);
+  }
+}
+
+@keyframes office-shake {
+  0%,
+  100% {
+    transform: translate(0, 0) rotate(0deg);
+  }
+  20% {
+    transform: translate(-3px, -4px) rotate(-4deg);
+  }
+  40% {
+    transform: translate(3px, -6px) rotate(4deg);
+  }
+  60% {
+    transform: translate(-2px, -3px) rotate(-3deg);
+  }
+  80% {
+    transform: translate(2px, -1px) rotate(2deg);
+  }
+}
+
+.alertMark {
+  position: absolute;
+  right: -6px;
+  top: -14px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #ffb84a;
+  color: #2a1700;
+  font-weight: 800;
+  font-size: 18px;
+  line-height: 1;
+  box-shadow:
+    0 0 0 2px #fff,
+    0 0 14px 3px rgb(255 184 74 / 0.9);
+}
+
+/* Vòng xoay dưới chân agent đang xử lý: hình tròn nét đứt bị ép dẹt theo mặt sàn. */
+.ringBox {
+  position: absolute;
+  left: -40px;
+  top: -16px;
+  width: 80px;
+  height: 80px;
+  transform: translateY(-24px) scaleY(0.36);
+  transform-origin: 50% 50%;
+}
+
+.ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 5px dashed rgb(120 220 255 / 0.95);
+  box-shadow: 0 0 14px rgb(120 220 255 / 0.8);
+  animation: office-spin 1.6s linear infinite;
+}
+
+@keyframes office-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ------------------------------------------------------------------ nhãn */
+
+.tag {
+  position: absolute;
+  left: var(--tag-x, 0px);
+  top: var(--tag-y, 0px);
+  transform: translate(-50%, 0) scale(var(--label-scale, 1));
+  transform-origin: 50% 0;
+  transition:
+    left 0.3s ease,
+    top 0.3s ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 7px 4px;
+  border-radius: 8px;
+  border: 1px solid rgb(255 255 255 / 0.16);
+  background: rgb(15 17 21 / 0.88);
+  color: var(--color-text);
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
+}
+
+.tagRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tagRowStacked {
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tagName {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.tagState {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--color-accent);
+}
+
+.tag[data-tone="idle"] .tagState,
+.tag[data-tone="done"] .tagState {
+  color: var(--color-ok);
+}
+
+.tag[data-tone="offline"] .tagState {
+  color: var(--color-text-dim);
+}
+
+.tag[data-tone="offline"] {
+  background: rgb(30 33 40 / 0.86);
+}
+
+.tag[data-tone="wait"] .tagState,
+.tag[data-tone="alert"] .tagState {
+  color: var(--color-warn);
+}
+
+.tag[data-tone="alert"] {
+  border-color: var(--color-warn);
+}
+
+.tag[data-tone="fail"] .tagState {
+  color: var(--color-danger);
+}
+
+.tag[data-tone="fail"] {
+  border-color: var(--color-danger);
+}
+
+.tagDetail {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-dim);
+}
+
+.dots {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.dot {
+  width: 8px;
+  height: 4px;
+  border-radius: 2px;
+  background: #3a4252;
+}
+
+.dotOn {
+  background: var(--color-accent);
+}
+
+.bubble {
+  position: absolute;
+  left: 0;
+  top: calc(-1 * var(--lift, 120px) - 8px);
+  z-index: 2000;
+  transform: translate(-50%, -100%) scale(var(--label-scale, 1));
+  transform-origin: 50% 100%;
+  max-width: 190px;
+  padding: 4px 9px 5px;
+  border-radius: 10px;
+  background: #fff;
+  color: #1c1f28;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 3px 10px rgb(0 0 0 / 0.3);
+  animation: office-bubble var(--bubble-ms, 6000ms) linear both;
+}
+
+.bubble[data-tone="fail"] {
+  background: #ffe1df;
+  color: #7a1512;
+  font-family: var(--font-mono);
+  box-shadow:
+    0 0 0 1.5px #e5534b,
+    0 3px 10px rgb(0 0 0 / 0.3);
+}
+
+.bubble[data-tone="info"] {
+  background: #e7eaf0;
+  color: #3b4250;
+}
+
+@keyframes office-bubble {
+  0% {
+    opacity: 0;
+  }
+  4%,
+  86% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Biển số của bảng kanban. */
+.plaque {
+  position: absolute;
+  transform: translate(-50%, -100%) scale(var(--label-scale, 1));
+  transform-origin: 50% 100%;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid rgb(255 255 255 / 0.2);
+  border-radius: 9px;
+  background: rgb(15 17 21 / 0.9);
+  color: var(--color-text);
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.4);
+}
+
+.plaque:hover {
+  border-color: var(--color-accent);
+}
+
+.plaqueCol {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 46px;
+  padding: 2px 5px;
+  border-radius: 6px;
+  background: var(--color-surface-2);
+}
+
+.plaqueNum {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.plaqueLabel {
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--color-text-dim);
+  white-space: nowrap;
+}
+
+.plaqueCol[data-tone="accent"] .plaqueNum {
+  color: var(--color-accent);
+}
+
+.plaqueCol[data-tone="ok"] .plaqueNum {
+  color: var(--color-ok);
+}
+
+.plaqueCol[data-tone="warn"] .plaqueNum {
+  color: var(--color-warn);
+}
+
+.plaqueCol[data-pulse="true"] {
+  animation: office-pulse 0.9s ease-out;
+}
+
+@keyframes office-pulse {
+  0% {
+    background: var(--color-ok);
+    transform: scale(1.25);
+  }
+  100% {
+    background: var(--color-surface-2);
+    transform: scale(1);
+  }
+}
+
+.rackLabel {
+  position: absolute;
+  transform: translate(-50%, 0) scale(var(--label-scale, 1));
+  transform-origin: 50% 0;
+  padding: 2px 7px;
+  border-radius: 7px;
+  border: 1px solid rgb(111 242 192 / 0.4);
+  background: rgb(15 17 21 / 0.88);
+  color: var(--color-ok);
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chip {
+  position: absolute;
+  transform: translate(-50%, -50%) scale(var(--label-scale, 1));
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 5px;
+  border-radius: 999px;
+  border: 1px solid var(--color-accent);
+  background: rgb(15 17 21 / 0.92);
+  color: var(--color-text);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.4);
+}
+
+.chipNum {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  font-weight: 700;
+}
+
+/* ------------------------------------------------------------------ hiệu ứng, biển báo */
+
+.signals {
+  position: absolute;
+  transform: translate(-50%, 0) scale(var(--label-scale, 1));
+  transform-origin: 50% 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+/* Biển treo: hai dây treo phía trên. */
+.signals::before {
+  content: "";
+  width: 120px;
+  height: 14px;
+  margin-bottom: -5px;
+  border-left: 2px solid rgb(40 30 50 / 0.8);
+  border-right: 2px solid rgb(40 30 50 / 0.8);
+}
+
+.sign {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 5px 14px 6px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  box-shadow:
+    0 4px 14px rgb(0 0 0 / 0.45),
+    inset 0 0 0 2px rgb(0 0 0 / 0.25);
+}
+
+.sign[data-tone="warn"] {
+  background: #ffb84a;
+  color: #2a1700;
+}
+
+.sign[data-tone="danger"] {
+  background: #e5534b;
+  color: #fff;
+}
+
+.signSub {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  opacity: 0.85;
+}
+
+.noteX {
+  position: absolute;
+  animation: office-note-x var(--note-ms, 1200ms) linear both;
+}
+
+.noteY {
+  display: block;
+  animation: office-note-y var(--note-ms, 1200ms) cubic-bezier(0.2, 0.9, 0.6, 1) both;
+}
+
+.note {
+  display: block;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border-radius: 3px;
+  background: linear-gradient(135deg, #fff3a0, #ffc94a);
+  box-shadow:
+    0 0 0 1.5px rgb(120 80 10 / 0.55),
+    0 0 14px 4px rgb(255 230 120 / 0.75),
+    0 4px 8px rgb(0 0 0 / 0.35);
+  animation: office-note-spin var(--note-ms, 1200ms) ease-out both;
+}
+
+@keyframes office-note-x {
+  to {
+    transform: translateX(var(--dx));
+  }
+}
+
+@keyframes office-note-y {
+  to {
+    transform: translateY(var(--dy));
+  }
+}
+
+@keyframes office-note-spin {
+  0% {
+    transform: rotate(-20deg) scale(0.4);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    transform: rotate(340deg) scale(0.75);
+    opacity: 0.2;
+  }
+}
+
+/* ------------------------------------------------------------------ debug */
+
+.debug {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  pointer-events: none;
+  font: 10px/1 var(--font-mono);
+  color: #fff;
+}
+
+.debugLineX,
+.debugLineY {
+  position: absolute;
+  background: rgb(0 0 0 / 0.35);
+  text-shadow: 0 0 2px #000;
+}
+
+.debugLineX {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.debugLineY {
+  left: 0;
+  right: 0;
+  height: 1px;
+}
+
+.debugDot {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  white-space: nowrap;
+  text-indent: 9px;
+  text-shadow: 0 0 2px #000;
+}
+
+.debugDot[data-kind="item"] {
+  background: #ff3df2;
+}
+
+.debugDot[data-kind="slot"] {
+  background: #00e5ff;
+}
+
+.debugDot[data-kind="gate"] {
+  background: #ffe600;
+  border-radius: 0;
+}
+
+/* ------------------------------------------------------------------ reduced motion */
+
+@media (prefers-reduced-motion: reduce) {
+  /* theme.css chỉ rút ngắn thời lượng; animation lặp vô hạn phải tắt hẳn. Sprite hiện frame 0 của đúng hàng trạng thái. */
+  .sprite,
+  .agentFloat,
+  .ring,
+  .screenContent,
+  .ledOn,
+  .vacuum,
+  .plaqueCol[data-pulse="true"] {
+    animation: none !important;
+  }
+
+  .stageBox,
+  .stage,
+  .actor,
+  .tagAnchor,
+  .tag,
+  .tint,
+  .tintDim {
+    transition: none !important;
+  }
+
+  .bubble {
+    animation: none !important;
+    opacity: 1;
+  }
+}
